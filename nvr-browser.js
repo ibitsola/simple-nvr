@@ -1,8 +1,23 @@
 const path = require('path');
+require('dotenv').config();
 const fsAsync = require('fs').promises;
 
 const express = require('express');
 const app = express();
+const basicAuth = require('express-basic-auth');
+
+const viewerUsername = process.env.CCTV_VIEWER_USERNAME;
+const viewerPassword = process.env.CCTV_VIEWER_PASSWORD;
+
+if (!viewerUsername || !viewerPassword) {
+    console.error('Missing CCTV_VIEWER_USERNAME or CCTV_VIEWER_PASSWORD environment variable');
+    process.exit(1);
+}
+
+app.use(basicAuth({
+    users: { [viewerUsername]: viewerPassword },
+    challenge: true
+}));
 const storage = require('./storage.json');
 
 const port = 3000;
@@ -10,8 +25,6 @@ const port = 3000;
 // set view engine
 app.set('view engine', 'ejs');
 app.set('views', 'views');
-
-app.use(require('./middleware/middleware.basic-auth'));
 
 // initialise the video-serving code
 app.use(require('./video-file-server'));

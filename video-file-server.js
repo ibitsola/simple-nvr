@@ -10,7 +10,32 @@ const storage = require('./storage.json');
 
 const tempDir = path.join(os.tmpdir(), 'simple-nvr-mp4');
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-const tempFiles = new Map(); // tempMp4 => timeoutId
+
+// Cleanup function for temp files
+function cleanupTempFiles() {
+    if (!fs.existsSync(tempDir)) return;
+    const now = Date.now();
+    const files = fs.readdirSync(tempDir);
+    for (const file of files) {
+        if (!file.endsWith('.mp4')) continue;
+        const filePath = path.join(tempDir, file);
+        try {
+            const stats = fs.statSync(filePath);
+            if (now - stats.mtime.getTime() > 5 * 60 * 1000) {
+                fs.unlinkSync(filePath);
+                console.log(`Cleaned up old temp MP4: ${filePath}`);
+            }
+        } catch (err) {
+            console.log(`Error checking temp file ${filePath}:`, err);
+        }
+    }
+}
+
+// Initial cleanup on startup
+cleanupTempFiles();
+
+// Periodic cleanup every minute
+setInterval(cleanupTempFiles, 60 * 1000);
 
 function serveVideoFile(filePath, res, ext, req) {
     fs.stat(filePath, function (err, stats) {
@@ -26,6 +51,8 @@ function serveVideoFile(filePath, res, ext, req) {
         var range = req.headers.range;
 
         var videoSize = stats.size;
+
+        console.log('Serving file:', filePath, 'size:', videoSize, 'range:', range);
 
         if (videoSize === 0) {
             console.log('File is empty or not ready:', filePath);
@@ -58,6 +85,8 @@ function serveVideoFile(filePath, res, ext, req) {
         const start = Number(startRaw);
         const requestedEnd = endRaw ? Number(endRaw) : start + CHUNK_SIZE;
 
+        console.log('Parsed range:', start, requestedEnd, 'for size:', videoSize);
+
         if (isNaN(start) || start < 0) {
             console.log('Invalid range start:', start, 'for file:', filePath);
             return res.status(416).send('Requested range not satisfiable');
@@ -79,16 +108,27 @@ function serveVideoFile(filePath, res, ext, req) {
             "Content-Type": contentType,
         };
         
-        // HTTP Status 206 for Partial Content
-        res.writeHead(206, headers);
+        // Re-validate file before streaming
+        fs.stat(filePath, (err, stats) => {
+            if (err || !stats || stats.size === 0) {
+                console.log('File became invalid before streaming:', filePath, err);
+                return res.status(404).send('File not available');
+            }
+            if (start >= stats.size || end >= stats.size) {
+                console.log('Range invalid after re-check:', start, end, stats.size, filePath);
+                return res.status(416).send('Requested range not satisfiable');
+            }
+            // HTTP Status 206 for Partial Content
+            res.writeHead(206, headers);
 
-        var stream = fs.createReadStream(filePath, { start: start, end: end })
-            .on("open", function () {
-                stream.pipe(res);
-            }).on("error", function (err) {
-                console.log('stream error', err)
-                res.send(err);
-            });
+            var stream = fs.createReadStream(filePath, { start: start, end: end })
+                .on("open", function () {
+                    stream.pipe(res);
+                }).on("error", function (err) {
+                    console.log('stream error', err)
+                    res.send(err);
+                });
+        });
     });
 }
 
@@ -109,32 +149,25 @@ router.get('/api/*.:ext', (req, res, next) => {
         const serve = () => serveVideoFile(tempMp4, res, 'mp4', req);
 
         if (fs.existsSync(tempMp4)) {
-            // reset timeout
-            if (tempFiles.has(tempMp4)) {
-                clearTimeout(tempFiles.get(tempMp4));
-            }
-            const timeoutId = setTimeout(() => {
-                fs.unlink(tempMp4, (err) => {
-                    if (!err) console.log(`Deleted temp MP4: ${tempMp4}`);
-                    tempFiles.delete(tempMp4);
-                });
-            }, 5 * 60 * 1000);
-            tempFiles.set(tempMp4, timeoutId);
+            // Update access time
+            fs.utimesSync(tempMp4, new Date(), new Date());
             serve();
         } else {
             console.log(`Generating temp MP4: ${tempMp4} from ${mkvPath}`);
             const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-c', 'copy', '-y', tempMp4]);
             ffmpeg.on('close', (code) => {
                 if (code === 0) {
-                    console.log(`Temp MP4 created: ${tempMp4}`);
-                    const timeoutId = setTimeout(() => {
-                        fs.unlink(tempMp4, (err) => {
-                            if (!err) console.log(`Deleted temp MP4: ${tempMp4}`);
-                            tempFiles.delete(tempMp4);
-                        });
-                    }, 5 * 60 * 1000);
-                    tempFiles.set(tempMp4, timeoutId);
-                    serve();
+                    // Verify the file was created successfully
+                    fs.stat(tempMp4, (err, stats) => {
+                        if (err || !stats || stats.size === 0) {
+                            console.error(`Temp MP4 generation failed or empty: ${tempMp4}`, err);
+                            return res.status(500).send('Failed to generate MP4');
+                        }
+                        console.log(`Temp MP4 created: ${tempMp4}, size: ${stats.size}`);
+                        // Update access time
+                        fs.utimesSync(tempMp4, new Date(), new Date());
+                        serve();
+                    });
                 } else {
                     console.error(`FFmpeg failed for ${tempMp4}`);
                     res.status(500).send('Failed to generate MP4');

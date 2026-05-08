@@ -27,6 +27,11 @@ function serveVideoFile(filePath, res, ext, req) {
 
         var videoSize = stats.size;
 
+        if (videoSize === 0) {
+            console.log('File is empty or not ready:', filePath);
+            return res.status(404).send('File not ready or empty');
+        }
+
         const contentType = ext === 'mkv' ? 'video/x-matroska' : `video/${ext}`;
 
         // Some players/browser checks request metadata without a Range header.
@@ -52,7 +57,18 @@ function serveVideoFile(filePath, res, ext, req) {
         const [startRaw, endRaw] = range.replace(/bytes=/, '').split('-');
         const start = Number(startRaw);
         const requestedEnd = endRaw ? Number(endRaw) : start + CHUNK_SIZE;
+
+        if (isNaN(start) || start < 0) {
+            console.log('Invalid range start:', start, 'for file:', filePath);
+            return res.status(416).send('Requested range not satisfiable');
+        }
+
         const end = Math.min(requestedEnd, videoSize - 1);
+
+        if (start > end || start >= videoSize) {
+            console.log('Invalid range:', start, '-', end, 'for videoSize:', videoSize, 'file:', filePath);
+            return res.status(416).send('Requested range not satisfiable');
+        }
 
         // Create headers
         const contentLength = end - start + 1;

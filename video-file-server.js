@@ -1,24 +1,19 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { spawn } = require('child_process');
 
 var router = express.Router();
 
 const storage = require('./storage.json');
 
-router.get('/api/*.:ext', (req, res, next) => {
-    // const location = req.params.location;
-    // const year = req.params.year;
-    // const month = req.params.month;
-    // const day = req.params.day;
-    // const filename = req.params.filename;
-    const ext = req.params.ext;
-    const parts = `${req.params['0']}.${ext}`.split('/').filter(x => x.length > 0);
+const tempDir = path.join(os.tmpdir(), 'simple-nvr-mp4');
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+const tempFiles = new Map(); // tempMp4 => timeoutId
 
-
-    // https://stackoverflow.com/a/24977085/10159640
-    var filepath = path.join(storage.rootpath, ...parts);
-    fs.stat(filepath, function (err, stats) {
+function serveVideoFile(filePath, res, ext, req) {
+    fs.stat(filePath, function (err, stats) {
         if (err) {
             if (err.code === 'ENOENT') {
                 console.log('file not found', err);
@@ -43,7 +38,7 @@ router.get('/api/*.:ext', (req, res, next) => {
                 "Content-Type": contentType,
             });
 
-            return fs.createReadStream(filepath)
+            return fs.createReadStream(filePath)
                 .on("error", function (err) {
                     console.log('stream error', err)
                     res.send(err);
@@ -71,7 +66,7 @@ router.get('/api/*.:ext', (req, res, next) => {
         // HTTP Status 206 for Partial Content
         res.writeHead(206, headers);
 
-        var stream = fs.createReadStream(filepath, { start: start, end: end })
+        var stream = fs.createReadStream(filePath, { start: start, end: end })
             .on("open", function () {
                 stream.pipe(res);
             }).on("error", function (err) {
@@ -79,6 +74,60 @@ router.get('/api/*.:ext', (req, res, next) => {
                 res.send(err);
             });
     });
+}
+
+router.get('/api/*.:ext', (req, res, next) => {
+    const ext = req.params.ext;
+    const parts = `${req.params['0']}.${ext}`.split('/').filter(x => x.length > 0);
+
+    var filepath = path.join(storage.rootpath, ...parts);
+
+    if (ext === 'mp4') {
+        const mkvPath = filepath.replace(/\.mp4$/, '.mkv');
+        if (!fs.existsSync(mkvPath)) {
+            return res.status(404).send('Corresponding MKV not found');
+        }
+        const relativePath = path.relative(storage.rootpath, filepath);
+        const tempMp4 = path.join(tempDir, Buffer.from(relativePath).toString('base64').replace(/=+$/, '') + '.mp4');
+
+        const serve = () => serveVideoFile(tempMp4, res, 'mp4', req);
+
+        if (fs.existsSync(tempMp4)) {
+            // reset timeout
+            if (tempFiles.has(tempMp4)) {
+                clearTimeout(tempFiles.get(tempMp4));
+            }
+            const timeoutId = setTimeout(() => {
+                fs.unlink(tempMp4, (err) => {
+                    if (!err) console.log(`Deleted temp MP4: ${tempMp4}`);
+                    tempFiles.delete(tempMp4);
+                });
+            }, 5 * 60 * 1000);
+            tempFiles.set(tempMp4, timeoutId);
+            serve();
+        } else {
+            console.log(`Generating temp MP4: ${tempMp4} from ${mkvPath}`);
+            const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-c', 'copy', '-y', tempMp4]);
+            ffmpeg.on('close', (code) => {
+                if (code === 0) {
+                    console.log(`Temp MP4 created: ${tempMp4}`);
+                    const timeoutId = setTimeout(() => {
+                        fs.unlink(tempMp4, (err) => {
+                            if (!err) console.log(`Deleted temp MP4: ${tempMp4}`);
+                            tempFiles.delete(tempMp4);
+                        });
+                    }, 5 * 60 * 1000);
+                    tempFiles.set(tempMp4, timeoutId);
+                    serve();
+                } else {
+                    console.error(`FFmpeg failed for ${tempMp4}`);
+                    res.status(500).send('Failed to generate MP4');
+                }
+            });
+        }
+    } else {
+        serveVideoFile(filepath, res, ext, req);
+    }
 })
 
 module.exports = router;

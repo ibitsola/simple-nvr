@@ -14,6 +14,7 @@ The camera video streams are saved in 5 minute files (to prevent long periods of
 To get started, the following steps must be taken:
 1. Install [ffmpeg](https://ffmpeg.org/).
 2. Choose where you want video files to be saved, and update the `rootpath` directory in the `/storage.json` configuration file.
+   * Optional: set `retentionDays` (default `30`) to automatically delete fully completed day folders older than this many days.
 3. Add camera names and RTSP addresses to the `/cameras.json` configuation file.
 4. Run the `nvr.js` server. e.g. using [PM2](https://pm2.keymetrics.io/) with: 
 ```
@@ -72,6 +73,14 @@ A file watcher looks for when multiple files exist in the `raw` directory, and m
 
 ### Detecting corrupted video files
 Very occasionally a video file becomes corrupted, and causes the concatination script to crash. To avoid this, each video file is scanned before the concatination script runs with `ffprobe`. Corrupted files are _not_ deleted in case they contain important (but corrupted) footage, and fixing the files may be possible.
+
+
+### Retention behaviour
+The recorder keeps continuous recording and only runs cleanup on dated day folders (`/YYYY/MM/DD`).
+
+Default retention is `30` days, configurable via `storage.json` -> `retentionDays`. Cleanup runs daily at `02:00 UTC`, never touches `raw/`, never deletes today or yesterday, and only removes fully completed old day folders older than the retention period. The daily concat job runs at `01:00 UTC` for yesterday's folder, and cleanup never targets yesterday, so there is no overlap on the same day directory.
+
+Daily concatenation still removes source 5-minute clips only after a successful combine.
 
 ### Hardware & Cameras
 Each camera on a Raspberry Pi 3b+ writing to an external HDD seems to use ~9% CPU.

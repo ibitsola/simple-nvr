@@ -29,19 +29,35 @@ router.get('/api/*.:ext', (req, res, next) => {
             return res.send(err);
         }
         var range = req.headers.range;
-        if (!range) {
-            // 416 Wrong range
-            console.log('no req range header')
-            return res.status(416).send();
-        }
 
         var videoSize = stats.size;
+
+        const contentType = ext === 'mkv' ? 'video/x-matroska' : `video/${ext}`;
+
+        // Some players/browser checks request metadata without a Range header.
+        // Serve the full file in that case instead of returning 416.
+        if (!range) {
+            res.writeHead(200, {
+                "Accept-Ranges": "bytes",
+                "Content-Length": videoSize,
+                "Content-Type": contentType,
+            });
+
+            return fs.createReadStream(filepath)
+                .on("error", function (err) {
+                    console.log('stream error', err)
+                    res.send(err);
+                })
+                .pipe(res);
+        }
 
         // Parse Range
         // Example: "bytes=32324-"
         const CHUNK_SIZE = 10 ** 6; // 1MB
-        const start = Number(range.replace(/\D/g, ""));
-        const end = Math.min(start + CHUNK_SIZE, videoSize - 1);
+        const [startRaw, endRaw] = range.replace(/bytes=/, '').split('-');
+        const start = Number(startRaw);
+        const requestedEnd = endRaw ? Number(endRaw) : start + CHUNK_SIZE;
+        const end = Math.min(requestedEnd, videoSize - 1);
 
         // Create headers
         const contentLength = end - start + 1;
@@ -49,7 +65,7 @@ router.get('/api/*.:ext', (req, res, next) => {
             "Content-Range": `bytes ${start}-${end}/${videoSize}`,
             "Accept-Ranges": "bytes",
             "Content-Length": contentLength,
-            "Content-Type": `video/${ext}`,
+            "Content-Type": contentType,
         };
         
         // HTTP Status 206 for Partial Content

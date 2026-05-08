@@ -10,6 +10,7 @@ const videoConcatinator = require('./video-concat.js');
 
 const videoLengthSeconds = 300; // 5 mins
 const timeoutRecordingWatcher = 1000 * 310; // 5 minutes 10 seconds - increased due to mkv files not triggering changes as frequently
+const retentionDays = Number.isInteger(storage.retentionDays) && storage.retentionDays >= 1 ? storage.retentionDays : 30;
 const cameras = [];
 
 module.exports.initCameras = () => {
@@ -55,6 +56,7 @@ class CameraStream {
         this.initTimeoutWatcher();
         this.initFileMover();
         this.initCombinationCron();
+        this.initRetentionCleanupCron();
         this.startRecording();
         this.log(`Camera initialised`);
     }
@@ -95,6 +97,75 @@ class CameraStream {
                 console.log('error combining files', error);
             }
         }, null, true, 'UTC');
+    }
+
+
+    initRetentionCleanupCron() {
+        // Cleanup runs after concatenation cron, but only deletes day folders older than retention and
+        // always skips today and yesterday. This means it cannot target the folder being concatenated.
+        new CronJob('0 2 * * *', async () => {
+            try {
+                await this.deleteOldDayFolders();
+            } catch (error) {
+                this.log('Retention cleanup failed', error);
+            }
+        }, null, true, 'UTC');
+    }
+
+    async deleteOldDayFolders() {
+        const dayFolders = await this.getDayDirectories();
+        const todayStart = new Date();
+        todayStart.setUTCHours(0, 0, 0, 0);
+
+        const yesterdayStart = new Date(todayStart);
+        yesterdayStart.setUTCDate(yesterdayStart.getUTCDate() - 1);
+
+        const retentionCutoff = new Date(todayStart);
+        retentionCutoff.setUTCDate(retentionCutoff.getUTCDate() - retentionDays);
+
+        for (let i = 0; i < dayFolders.length; i++) {
+            const item = dayFolders[i];
+            const dayDate = item.date;
+
+            if (dayDate >= yesterdayStart) continue; // never delete today or yesterday
+            if (dayDate >= retentionCutoff) continue; // still within retention period
+
+            try {
+                await fsAsync.rm(item.path, { recursive: true, force: false });
+                this.log(`Deleted old day folder: ${item.path}`);
+            } catch (error) {
+                this.log(`Failed to delete old day folder: ${item.path}`, error);
+            }
+        }
+    }
+
+    async getDayDirectories() {
+        const results = [];
+        const yearEntries = await fsAsync.readdir(this.storagePath, { withFileTypes: true });
+
+        for (const yearEntry of yearEntries) {
+            if (!yearEntry.isDirectory() || !/^\d{4}$/.test(yearEntry.name)) continue;
+            const yearPath = path.join(this.storagePath, yearEntry.name);
+            const monthEntries = await fsAsync.readdir(yearPath, { withFileTypes: true });
+
+            for (const monthEntry of monthEntries) {
+                if (!monthEntry.isDirectory() || !/^\d{2}$/.test(monthEntry.name)) continue;
+                const monthPath = path.join(yearPath, monthEntry.name);
+                const dayEntries = await fsAsync.readdir(monthPath, { withFileTypes: true });
+
+                for (const dayEntry of dayEntries) {
+                    if (!dayEntry.isDirectory() || !/^\d{2}$/.test(dayEntry.name)) continue;
+
+                    const dayPath = path.join(monthPath, dayEntry.name);
+                    const dayDate = new Date(`${yearEntry.name}-${monthEntry.name}-${dayEntry.name}T00:00:00.000Z`);
+                    if (Number.isNaN(dayDate.valueOf())) continue;
+
+                    results.push({ path: dayPath, date: dayDate });
+                }
+            }
+        }
+
+        return results;
     }
 
     log(message, ...optionalParams) {

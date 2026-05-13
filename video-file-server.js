@@ -18,14 +18,14 @@ function createTempMp4(mkvPath, tempMp4) {
         return generationPromises.get(tempMp4);
     }
 
-    const tempMp4Tmp = `${tempMp4}.tmp`;
+    const tempMp4Tmp = `${tempMp4}.tmp.mp4`;
     if (fs.existsSync(tempMp4Tmp)) {
         try { fs.unlinkSync(tempMp4Tmp); } catch (err) { }
     }
 
     const promise = new Promise((resolve, reject) => {
         console.log(`Starting MP4 generation for: ${tempMp4}`);
-        const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-c', 'copy', '-y', tempMp4Tmp]);
+        const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-f', 'mp4', '-c', 'copy', '-y', tempMp4Tmp]);
 
         ffmpeg.on('error', (err) => {
             console.error(`FFmpeg spawn error for ${tempMp4Tmp}:`, err);

@@ -198,6 +198,10 @@ router.get('/api/*.:ext', async (req, res, next) => {
         if (!fs.existsSync(mkvPath)) {
             return res.status(404).send('Corresponding MKV not found');
         }
+        if (path.basename(mkvPath) === 'output.mkv') {
+            console.log('Skipping MP4 generation for output.mkv');
+            return res.status(404).send('MP4 playback not supported for output.mkv');
+        }
 
         const relativePath = path.relative(storage.rootpath, filepath);
         const tempMp4 = path.join(tempDir, Buffer.from(relativePath).toString('base64').replace(/=+$/, '') + '.mp4');

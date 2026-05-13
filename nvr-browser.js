@@ -69,7 +69,9 @@ app.get('*', async (req, res, next) => {
     }
 
     const directory = path.join(storage.rootpath, ...route);
-    const folderItems = (await fsAsync.readdir(directory, { withFileTypes: true })).map(dirent => dirent.name);
+    const folderItems = (await fsAsync.readdir(directory, { withFileTypes: true }))
+        .filter(dirent => dirent.name !== 'files.txt')
+        .map(dirent => dirent.name);
     const locations = [];
     for (let i = 0; i < folderItems.length; i++) {
         const folderItem = folderItems[i];

@@ -10,7 +10,7 @@
         <%- include('includes/breadcrumb.ejs') %>
 
         <video width="100%" controls>
-            <% if (videoUrl.endsWith('.mkv')) { %>
+            <% if (videoUrl.endsWith('.mkv') && !videoUrl.includes('/output.mkv')) { %>
             <source src="<%= videoUrl.replace('.mkv', '.mp4') %>" type="video/mp4">
             <% } %>
             <source src="<%= videoUrl %>" type="<%= videoUrl.endsWith('.mkv') ? 'video/x-matroska' : 'video/mp4' %>">

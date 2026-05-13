@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const fsPromises = fs.promises;
 const os = require('os');
 const { spawn } = require('child_process');
 
@@ -10,6 +11,60 @@ const storage = require('./storage.json');
 
 const tempDir = path.join(os.tmpdir(), 'simple-nvr-mp4');
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+const generationPromises = new Map();
+
+function createTempMp4(mkvPath, tempMp4) {
+    if (generationPromises.has(tempMp4)) {
+        return generationPromises.get(tempMp4);
+    }
+
+    const tempMp4Tmp = `${tempMp4}.tmp`;
+    if (fs.existsSync(tempMp4Tmp)) {
+        try { fs.unlinkSync(tempMp4Tmp); } catch (err) { }
+    }
+
+    const promise = new Promise((resolve, reject) => {
+        console.log(`Starting MP4 generation for: ${tempMp4}`);
+        const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-c', 'copy', '-y', tempMp4Tmp]);
+
+        ffmpeg.on('error', (err) => {
+            console.error(`FFmpeg spawn error for ${tempMp4Tmp}:`, err);
+            try { if (fs.existsSync(tempMp4Tmp)) fs.unlinkSync(tempMp4Tmp); } catch (cleanupErr) { }
+            reject(err);
+        });
+
+        ffmpeg.on('close', (code) => {
+            if (code !== 0) {
+                console.error(`FFmpeg failed for ${tempMp4Tmp} with code ${code}`);
+                try { if (fs.existsSync(tempMp4Tmp)) fs.unlinkSync(tempMp4Tmp); } catch (cleanupErr) { }
+                return reject(new Error(`FFmpeg exited with code ${code}`));
+            }
+
+            fs.stat(tempMp4Tmp, (err, stats) => {
+                if (err || !stats || stats.size === 0) {
+                    console.error(`Temp MP4 generation failed or empty: ${tempMp4Tmp}`, err);
+                    try { if (fs.existsSync(tempMp4Tmp)) fs.unlinkSync(tempMp4Tmp); } catch (cleanupErr) { }
+                    return reject(new Error('Generated MP4 is empty'));    
+                }
+
+                try {
+                    fs.renameSync(tempMp4Tmp, tempMp4);
+                } catch (renameErr) {
+                    console.error(`Failed to rename ${tempMp4Tmp} to ${tempMp4}:`, renameErr);
+                    try { if (fs.existsSync(tempMp4Tmp)) fs.unlinkSync(tempMp4Tmp); } catch (cleanupErr) { }
+                    return reject(renameErr);
+                }
+
+                console.log(`Temp MP4 created: ${tempMp4}, size: ${stats.size}`);
+                resolve(tempMp4);
+            });
+        });
+    });
+
+    generationPromises.set(tempMp4, promise);
+    promise.finally(() => generationPromises.delete(tempMp4));
+    return promise;
+}
 
 // Cleanup function for temp files
 function cleanupTempFiles() {
@@ -17,13 +72,13 @@ function cleanupTempFiles() {
     const now = Date.now();
     const files = fs.readdirSync(tempDir);
     for (const file of files) {
-        if (!file.endsWith('.mp4')) continue;
+        if (!file.endsWith('.mp4') && !file.endsWith('.tmp')) continue;
         const filePath = path.join(tempDir, file);
         try {
             const stats = fs.statSync(filePath);
             if (now - stats.mtime.getTime() > 5 * 60 * 1000) {
                 fs.unlinkSync(filePath);
-                console.log(`Cleaned up old temp MP4: ${filePath}`);
+                console.log(`Cleaned up old temp file: ${filePath}`);
             }
         } catch (err) {
             console.log(`Error checking temp file ${filePath}:`, err);
@@ -132,7 +187,7 @@ function serveVideoFile(filePath, res, ext, req) {
     });
 }
 
-router.get('/api/*.:ext', (req, res, next) => {
+router.get('/api/*.:ext', async (req, res, next) => {
     const ext = req.params.ext;
     const parts = `${req.params['0']}.${ext}`.split('/').filter(x => x.length > 0);
 
@@ -143,36 +198,41 @@ router.get('/api/*.:ext', (req, res, next) => {
         if (!fs.existsSync(mkvPath)) {
             return res.status(404).send('Corresponding MKV not found');
         }
+
         const relativePath = path.relative(storage.rootpath, filepath);
         const tempMp4 = path.join(tempDir, Buffer.from(relativePath).toString('base64').replace(/=+$/, '') + '.mp4');
-
+        const tempMp4Tmp = `${tempMp4}.tmp`;
         const serve = () => serveVideoFile(tempMp4, res, 'mp4', req);
 
-        if (fs.existsSync(tempMp4)) {
-            // Update access time
-            fs.utimesSync(tempMp4, new Date(), new Date());
-            serve();
-        } else {
-            console.log(`Generating temp MP4: ${tempMp4} from ${mkvPath}`);
-            const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-c', 'copy', '-y', tempMp4]);
-            ffmpeg.on('close', (code) => {
-                if (code === 0) {
-                    // Verify the file was created successfully
-                    fs.stat(tempMp4, (err, stats) => {
-                        if (err || !stats || stats.size === 0) {
-                            console.error(`Temp MP4 generation failed or empty: ${tempMp4}`, err);
-                            return res.status(500).send('Failed to generate MP4');
-                        }
-                        console.log(`Temp MP4 created: ${tempMp4}, size: ${stats.size}`);
-                        // Update access time
-                        fs.utimesSync(tempMp4, new Date(), new Date());
-                        serve();
-                    });
-                } else {
-                    console.error(`FFmpeg failed for ${tempMp4}`);
-                    res.status(500).send('Failed to generate MP4');
+        try {
+            if (generationPromises.has(tempMp4)) {
+                console.log(`Waiting for ongoing MP4 generation: ${tempMp4}`);
+                await generationPromises.get(tempMp4);
+                fs.utimesSync(tempMp4, new Date(), new Date());
+                return serve();
+            }
+
+            if (fs.existsSync(tempMp4)) {
+                const stats = await fsPromises.stat(tempMp4);
+                if (stats.size > 0) {
+                    fs.utimesSync(tempMp4, new Date(), new Date());
+                    return serve();
                 }
-            });
+                console.log(`Existing MP4 file is empty, removing: ${tempMp4}`);
+                fs.unlinkSync(tempMp4);
+            }
+
+            if (fs.existsSync(tempMp4Tmp) && !generationPromises.has(tempMp4)) {
+                console.log(`Removing stale temp file: ${tempMp4Tmp}`);
+                fs.unlinkSync(tempMp4Tmp);
+            }
+
+            await createTempMp4(mkvPath, tempMp4);
+            fs.utimesSync(tempMp4, new Date(), new Date());
+            return serve();
+        } catch (err) {
+            console.error(`Failed to prepare MP4 for ${tempMp4}:`, err.message || err);
+            return res.status(500).send('Failed to generate MP4');
         }
     } else {
         serveVideoFile(filepath, res, ext, req);

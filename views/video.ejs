@@ -15,6 +15,7 @@
             <% } %>
             <source src="<%= videoUrl %>" type="<%= videoUrl.endsWith('.mkv') ? 'video/x-matroska' : 'video/mp4' %>">
         </video>
+        <p class="video-note">iPhone playback uses a temporary MP4 copy for 5-minute clips.</p>
     </div>
 
     <%- include('includes/video-keys.ejs') %>

@@ -69,20 +69,32 @@ app.get('*', async (req, res, next) => {
     }
 
     const directory = path.join(storage.rootpath, ...route);
+    const ignoreNames = new Set(['raw', 'lost+found', 'test.txt', 'files.txt']);
     const folderItems = (await fsAsync.readdir(directory, { withFileTypes: true }))
-        .filter(dirent => dirent.name !== 'files.txt')
-        .map(dirent => dirent.name);
+        .filter(dirent => !ignoreNames.has(dirent.name))
+        .map(dirent => ({
+            name: dirent.name,
+            route: `/${[...route, dirent.name].join('/')}`,
+            type: dirent.isDirectory() ? 'folder' : (dirent.name.endsWith('.mkv') ? 'video' : 'file'),
+            isDirectory: dirent.isDirectory()
+        }))
+        .sort((a, b) => {
+            if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+            if (a.isDirectory) return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+            return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' });
+        });
     const locations = [];
     for (let i = 0; i < folderItems.length; i++) {
         const folderItem = folderItems[i];
         locations.push({
-            name: folderItem,
-            route: `/${[...route, folderItem].join('/')}`
+            name: folderItem.name,
+            route: folderItem.route,
+            type: folderItem.type
         })
     }
 
     res.render('folder', {
-        pageTitle: 'Cameras',
+        pageTitle: 'CCTV Viewer',
         route: breadcrumbs,
         locations: locations
     })

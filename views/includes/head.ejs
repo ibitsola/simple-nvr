@@ -15,3 +15,50 @@
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
 
     <title><%= pageTitle %></title>
+    <style>
+      .breadcrumb {
+        background: transparent;
+        margin-bottom: 1rem;
+        padding: 0;
+      }
+      .list-group-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1rem 1rem;
+        font-size: 1rem;
+      }
+      .item-icon {
+        font-size: 1.2rem;
+        width: 1.5rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .item-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+      .video-note {
+        margin-top: 0.75rem;
+        color: #555;
+        font-size: 0.95rem;
+      }
+      @media (max-width: 767.98px) {
+        .list-group-item {
+          padding: 1.1rem 1rem;
+          font-size: 1.05rem;
+        }
+        .breadcrumb-item + .breadcrumb-item::before {
+          content: ">";
+          color: #6c757d;
+        }
+        .breadcrumb a {
+          font-size: 0.95rem;
+        }
+        .video-note {
+          font-size: 1rem;
+        }
+      }
+    </style>

@@ -11,7 +11,15 @@
 
         <div class="list-group">
             <% for (let i = 0; i < locations.length; i++) { const location = locations[i]; %>
-            <a href="<%= location.route %>" class="list-group-item list-group-item-action"><%= location.name %></a>
+            <a href="<%= location.route %>" class="list-group-item list-group-item-action">
+                <span class="item-label">
+                    <span class="item-icon"><%= location.type === 'folder' ? '📁' : location.type === 'video' ? '🎥' : '📄' %></span>
+                    <span><%= location.name %></span>
+                </span>
+                <% if (location.type === 'video') { %>
+                <span class="text-muted small">Video</span>
+                <% } %>
+            </a>
             <% } %>
         </div>
     </div>

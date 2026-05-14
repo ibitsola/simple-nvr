@@ -84,8 +84,16 @@ app.get('*.:ext', async (req, res, next) => {
     const currentParts = [];
     for (let i = 0; i < route.length; i++) {
         const folder = route[i];
+        const isLastItem = i === route.length - 1;
+        let displayName = folder;
+        
+        if (isLastItem && folder.endsWith('.mkv')) {
+            displayName = parseVideoDisplayName(folder);
+        }
+        
         breadcrumbs.push({
             name: folder,
+            displayName: displayName,
             route: '/' + [...currentParts, folder].join('/')
         })
         currentParts.push(folder);
@@ -106,8 +114,15 @@ app.get('*', async (req, res, next) => {
     const currentParts = [];
     for (let i = 0; i < route.length; i++) {
         const folder = route[i];
+        let displayName = folder;
+        
+        if (route.length >= 3 && i === route.length - 1 && /^\d{2}$/.test(folder)) {
+            displayName = parseDayFolderDisplayName(folder, route.slice(0, i));
+        }
+        
         breadcrumbs.push({
             name: folder,
+            displayName: displayName,
             route: '/' + [...currentParts, folder].join('/')
         })
         currentParts.push(folder);

@@ -14,7 +14,7 @@
             <a href="<%= location.route %>" class="list-group-item list-group-item-action">
                 <span class="item-label">
                     <span class="item-icon"><%= location.type === 'folder' ? '📁' : location.type === 'video' ? '🎥' : '📄' %></span>
-                    <span><%= location.name %></span>
+                    <span><%= location.displayName || location.name %></span>
                 </span>
                 <% if (location.type === 'video') { %>
                 <span class="text-muted small">Video</span>

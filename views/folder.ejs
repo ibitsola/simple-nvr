@@ -11,7 +11,7 @@
 
         <div class="list-group">
             <% for (let i = 0; i < locations.length; i++) { const location = locations[i]; %>
-            <a href="<%= location.route %>" class="list-group-item list-group-item-action"><%= location.name %></a>
+            <a href="<%= location.route %>" class="list-group-item list-group-item-action"><%= location.displayName || location.name %></a>
             <% } %>
         </div>
     </div>

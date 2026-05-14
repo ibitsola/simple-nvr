@@ -22,6 +22,37 @@ const storage = require('./storage.json');
 
 const port = 3000;
 
+function parseVideoDisplayName(filename) {
+    if (filename === 'output.mkv') {
+        return 'Full day recording';
+    }
+    const match = filename.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}) (\d{2}) (\d{2})\.mkv$/);
+    if (!match) return filename;
+    
+    // Parse filename timestamp as UTC
+    const year = match[1];
+    const month = match[2];
+    const day = match[3];
+    const hour = match[4];
+    const minute = match[5];
+    const second = match[6];
+    
+    const utcDateString = `${year}-${month}-${day}T${hour}:${minute}:${second}Z`;
+    const date = new Date(utcDateString);
+    
+    if (isNaN(date.getTime())) return filename;
+    
+    // Convert to Europe/London timezone (handles BST/GMT automatically)
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZone: 'Europe/London'
+    });
+    
+    return formatter.format(date);
+}
+
 // set view engine
 app.set('view engine', 'ejs');
 app.set('views', 'views');
@@ -48,7 +79,7 @@ app.get('*.:ext', async (req, res, next) => {
 
     const filename = route[route.length - 1];
     res.render('video', {
-        pageTitle: `${filename}`,
+        pageTitle: parseVideoDisplayName(filename),
         videoUrl: `/api/${req.params['0']}.${filetype}`,
         route: breadcrumbs
     })
@@ -69,13 +100,28 @@ app.get('*', async (req, res, next) => {
     }
 
     const directory = path.join(storage.rootpath, ...route);
-    const folderItems = (await fsAsync.readdir(directory, { withFileTypes: true })).map(dirent => dirent.name);
+    const folderItems = (await fsAsync.readdir(directory, { withFileTypes: true }))
+        .map(dirent => {
+            const name = dirent.name;
+            const isDirectory = dirent.isDirectory();
+            let displayName = name;
+            if (!isDirectory && name.endsWith('.mkv')) {
+                displayName = parseVideoDisplayName(name);
+            }
+            return {
+                name,
+                route: `/${[...route, name].join('/')}`,
+                displayName,
+                isDirectory
+            };
+        });
     const locations = [];
     for (let i = 0; i < folderItems.length; i++) {
         const folderItem = folderItems[i];
         locations.push({
-            name: folderItem,
-            route: `/${[...route, folderItem].join('/')}`
+            name: folderItem.name,
+            route: folderItem.route,
+            displayName: folderItem.displayName
         })
     }
 

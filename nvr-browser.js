@@ -24,7 +24,7 @@ const port = 3000;
 
 function parseVideoDisplayName(filename) {
     if (filename === 'output.mkv') {
-        return '🎥 Full day recording';
+        return 'Full day recording';
     }
     const match = filename.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}) (\d{2}) (\d{2})\.mkv$/);
     if (!match) return filename;
@@ -34,7 +34,7 @@ function parseVideoDisplayName(filename) {
     if (hour === 0) hour = 12;
     if (hour > 12) hour -= 12;
     const minutePadded = minute.toString().padStart(2, '0');
-    return `🎥 ${hour}:${minutePadded} ${suffix}`;
+    return `${hour}:${minutePadded} ${suffix}`;
 }
 
 function parseDayFolderDisplayName(folderName, route) {
@@ -132,7 +132,8 @@ app.get('*', async (req, res, next) => {
         locations.push({
             name: folderItem.name,
             route: folderItem.route,
-            type: folderItem.type
+            type: folderItem.type,
+            displayName: folderItem.displayName
         })
     }
 

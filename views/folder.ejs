@@ -10,41 +10,8 @@
         <%- include('includes/breadcrumb.ejs') %>
 
         <div class="list-group">
-            <% 
-            let currentDateGroup = null;
-            for (let i = 0; i < locations.length; i++) { 
-                const location = locations[i];
-                const dateGroup = location.localDateKey || location.name;
-                
-                if (location.type === 'video' && dateGroup !== currentDateGroup) {
-                    if (currentDateGroup !== null) { %>
-                        </div>
-                    <% } %>
-                    <% 
-                    const dateObj = new Date(dateGroup + 'T00:00:00Z');
-                    const formatter = new Intl.DateTimeFormat('en-US', {
-                        weekday: 'long',
-                        day: 'numeric',
-                        month: 'short',
-                        timeZone: 'Europe/London'
-                    });
-                    const dateLabel = formatter.format(dateObj);
-                    currentDateGroup = dateGroup;
-                    %>
-                    <div class="mt-3">
-                        <div class="text-muted small ps-3 py-2" style="border-bottom: 1px solid #dee2e6;"><%= dateLabel %></div>
-                        <div class="list-group-nested">
-                    <% } %>
-                    
-                    <% if (location.type === 'video') { %>
-                        <a href="<%= location.route %>" class="list-group-item list-group-item-action ps-5"><%= location.displayName || location.name %></a>
-                    <% } else { %>
-                        <a href="<%= location.route %>" class="list-group-item list-group-item-action"><%= location.displayName || location.name %></a>
-                    <% } %>
-            <% } %>
-            <% if (currentDateGroup !== null) { %>
-                        </div>
-                    </div>
+            <% for (let i = 0; i < locations.length; i++) { const location = locations[i]; %>
+            <a href="<%= location.route %>" class="list-group-item list-group-item-action"><%= location.displayName || location.name %></a>
             <% } %>
         </div>
     </div>

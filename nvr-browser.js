@@ -137,9 +137,27 @@ app.get('*', async (req, res, next) => {
             const isDirectory = dirent.isDirectory();
             const type = isDirectory ? 'folder' : (name.endsWith('.mkv') ? 'video' : 'file');
             let displayName = name;
+            let localDateKey = null;
 
             if (type === 'video') {
                 displayName = parseVideoDisplayName(name);
+                // Calculate Europe/London local date for grouping clips
+                const match = name.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}) (\d{2}) (\d{2})\.mkv$/);
+                if (match) {
+                    const utcDateStr = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`;
+                    const utcDate = new Date(utcDateStr);
+                    if (!isNaN(utcDate.getTime())) {
+                        const formatter = new Intl.DateTimeFormat('en-GB', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            timeZone: 'Europe/London'
+                        });
+                        const localDateStr = formatter.format(utcDate);
+                        const [dayStr, monthStr, yearStr] = localDateStr.split('/');
+                        localDateKey = `${yearStr}-${monthStr}-${dayStr}`;
+                    }
+                }
             } else if (type === 'folder' && route.length >= 3) {
                 displayName = parseDayFolderDisplayName(name, route);
             }
@@ -149,14 +167,21 @@ app.get('*', async (req, res, next) => {
                 route: `/${[...route, name].join('/')}`,
                 type,
                 isDirectory,
-                displayName
+                displayName,
+                localDateKey
             };
         })
         .sort((a, b) => {
             if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
             if (a.isDirectory) return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+            // For videos, sort by local date (descending), then by time within that date (descending)
+            if (a.localDateKey && b.localDateKey) {
+                const dateCompare = b.localDateKey.localeCompare(a.localDateKey);
+                if (dateCompare !== 0) return dateCompare;
+            }
             return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' });
         });
+    
     const locations = [];
     for (let i = 0; i < folderItems.length; i++) {
         const folderItem = folderItems[i];
@@ -164,7 +189,8 @@ app.get('*', async (req, res, next) => {
             name: folderItem.name,
             route: folderItem.route,
             type: folderItem.type,
-            displayName: folderItem.displayName
+            displayName: folderItem.displayName,
+            localDateKey: folderItem.localDateKey
         })
     }
 

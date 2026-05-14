@@ -133,6 +133,29 @@ class CameraStream {
             try {
                 await fsAsync.rm(item.path, { recursive: true, force: false });
                 this.log(`Deleted old day folder: ${item.path}`);
+
+                const monthPath = path.dirname(item.path);
+                const yearPath = path.dirname(monthPath);
+
+                try {
+                    const monthEntries = await fsAsync.readdir(monthPath);
+                    if (monthEntries.length === 0) {
+                        await fsAsync.rmdir(monthPath);
+                        this.log(`Deleted empty month folder: ${monthPath}`);
+                    }
+                } catch (cleanupError) {
+                    // ignore if month folder is not empty or cannot be removed
+                }
+
+                try {
+                    const yearEntries = await fsAsync.readdir(yearPath);
+                    if (yearEntries.length === 0) {
+                        await fsAsync.rmdir(yearPath);
+                        this.log(`Deleted empty year folder: ${yearPath}`);
+                    }
+                } catch (cleanupError) {
+                    // ignore if year folder is not empty or cannot be removed
+                }
             } catch (error) {
                 this.log(`Failed to delete old day folder: ${item.path}`, error);
             }

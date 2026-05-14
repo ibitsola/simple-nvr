@@ -53,6 +53,20 @@ function parseVideoDisplayName(filename) {
     return formatter.format(date);
 }
 
+function parseDayFolderDisplayName(folderName, route) {
+    if (!/^\d{2}$/.test(folderName)) return folderName;
+    if (route.length < 3) return folderName;
+    const year = route[route.length - 2];
+    const month = route[route.length - 1];
+    if (!/^\d{4}$/.test(year) || !/^\d{2}$/.test(month)) return folderName;
+    const date = new Date(`${year}-${month}-${folderName}T00:00:00Z`);
+    if (Number.isNaN(date.valueOf())) return folderName;
+    const weekday = date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+    const monthName = date.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+    const dayNumber = date.getUTCDate();
+    return `${weekday} ${dayNumber} ${monthName}`;
+}
+
 // set view engine
 app.set('view engine', 'ejs');
 app.set('views', 'views');
@@ -100,20 +114,33 @@ app.get('*', async (req, res, next) => {
     }
 
     const directory = path.join(storage.rootpath, ...route);
+    const ignoreNames = new Set(['raw', 'lost+found', 'test.txt', 'files.txt']);
     const folderItems = (await fsAsync.readdir(directory, { withFileTypes: true }))
+        .filter(dirent => !ignoreNames.has(dirent.name))
         .map(dirent => {
             const name = dirent.name;
             const isDirectory = dirent.isDirectory();
+            const type = isDirectory ? 'folder' : (name.endsWith('.mkv') ? 'video' : 'file');
             let displayName = name;
-            if (!isDirectory && name.endsWith('.mkv')) {
+
+            if (type === 'video') {
                 displayName = parseVideoDisplayName(name);
+            } else if (type === 'folder' && route.length >= 3) {
+                displayName = parseDayFolderDisplayName(name, route);
             }
+
             return {
                 name,
                 route: `/${[...route, name].join('/')}`,
-                displayName,
-                isDirectory
+                type,
+                isDirectory,
+                displayName
             };
+        })
+        .sort((a, b) => {
+            if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+            if (a.isDirectory) return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+            return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' });
         });
     const locations = [];
     for (let i = 0; i < folderItems.length; i++) {
@@ -121,12 +148,13 @@ app.get('*', async (req, res, next) => {
         locations.push({
             name: folderItem.name,
             route: folderItem.route,
+            type: folderItem.type,
             displayName: folderItem.displayName
         })
     }
 
     res.render('folder', {
-        pageTitle: 'Cameras',
+        pageTitle: 'CCTV Viewer',
         route: breadcrumbs,
         locations: locations
     })

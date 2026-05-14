@@ -10,8 +10,12 @@
         <%- include('includes/breadcrumb.ejs') %>
 
         <video width="100%" controls>
-            <source src="<%= videoUrl %>">
+            <% if (videoUrl.endsWith('.mkv') && !videoUrl.includes('/output.mkv')) { %>
+            <source src="<%= videoUrl.replace('.mkv', '.mp4') %>" type="video/mp4">
+            <% } %>
+            <source src="<%= videoUrl %>" type="<%= videoUrl.endsWith('.mkv') ? 'video/x-matroska' : 'video/mp4' %>">
         </video>
+        <p class="video-note">iPhone playback uses a temporary MP4 copy for 5-minute clips.</p>
     </div>
 
     <%- include('includes/video-keys.ejs') %>

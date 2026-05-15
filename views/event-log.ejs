@@ -34,7 +34,7 @@
                                 <span class="badge badge-primary"><%= Math.round(event.confidence * 100) %>%</span>
                             </div>
                             <div class="text-muted small">
-                                <div><strong>Time:</strong> <%= event.timestamp %></div>
+                                <div><strong>Time:</strong> <%= event.timestampLocalDisplay || event.timestampUtc || event.timestamp %></div>
                                 <div><strong>Camera:</strong> <%= event.camera %></div>
                                 <% if (event.colour && event.colour !== 'unknown') { %>
                                     <div><strong>Color:</strong> <%= event.colour %></div>

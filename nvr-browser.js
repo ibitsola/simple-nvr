@@ -100,7 +100,7 @@ app.get('/events', async (req, res) => {
         for (const line of lines) {
           try { events.push(JSON.parse(line)); } catch (e) { /* skip malformed */ }
         }
-        events.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+        events.sort((a,b) => new Date(b.timestampUtc || b.timestamp) - new Date(a.timestampUtc || a.timestamp));
       }
     }
   } catch (err) {

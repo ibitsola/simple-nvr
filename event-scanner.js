@@ -1,27 +1,49 @@
 const path = require('path');
 const fs = require('fs');
 const fsAsync = require('fs').promises;
+const crypto = require('crypto');
+const { spawn } = require('child_process');
 require('dotenv').config();
 
 let config = {};
 let scannerState = {};
+const SCANNER_STATE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const DETECTOR_TIMEOUT_MS = 120 * 1000;
 
 // Initialize configuration
-async function loadConfig() {
+async function loadConfig(options = {}) {
     try {
+        const prepareWhenDisabled = Boolean(options.prepareWhenDisabled);
         const configPath = path.join(__dirname, 'event-detection.json');
         const configData = await fsAsync.readFile(configPath, 'utf8');
         config = JSON.parse(configData);
         console.log('✓ Event detection config loaded');
         
-        if (!config.enabled) {
+        config.maxFramesPerClip = Number(config.maxFramesPerClip || 8);
+        config.sampleEverySeconds = Number(config.sampleEverySeconds || 30);
+        config.minConfidence = Number(config.minConfidence || 0.5);
+        config.classes = config.classes || ['person', 'cat'];
+        config.tempFrameDir = config.tempFrameDir || '/tmp/simple-nvr-events';
+        config.pythonExecutable = config.pythonExecutable || 'python3';
+        config.pythonDetectorPath = config.pythonDetectorPath || 'scripts/detect-events.py';
+
+        if (!path.isAbsolute(config.pythonDetectorPath)) {
+            config.pythonDetectorPath = path.join(__dirname, config.pythonDetectorPath);
+        }
+
+        if (!config.enabled && !prepareWhenDisabled) {
             console.log('ℹ Event detection is disabled in config');
             return false;
         }
-        
+
         // Ensure directories exist
         await fsAsync.mkdir(path.dirname(config.eventLogPath), { recursive: true });
         await fsAsync.mkdir(config.thumbnailDir, { recursive: true });
+        await fsAsync.mkdir(config.tempFrameDir, { recursive: true });
+
+        if (!config.enabled) {
+            console.log('ℹ Event detection is disabled in config; continuing for manual clip scan');
+        }
         
         return true;
     } catch (err) {
@@ -43,11 +65,14 @@ async function loadState() {
             processedClips: {}
         };
     }
+
+    pruneScannerState();
 }
 
 // Save scanner state
 async function saveState() {
     try {
+        pruneScannerState();
         const statePath = path.join(path.dirname(config.eventLogPath), 'scanner-state.json');
         await fsAsync.writeFile(statePath, JSON.stringify(scannerState, null, 2));
     } catch (err) {
@@ -55,33 +80,182 @@ async function saveState() {
     }
 }
 
-// Placeholder detection function
-// In Phase 2, this will be replaced with actual YOLO/OpenCV detection
-async function detectEventsInClip(clipPath) {
-    // PHASE 2: Replace this with real YOLO/OpenCV detection
-    // For now, return empty array (no false positives)
-    // 
-    // Future implementation should:
-    // 1. Extract frames from MKV using ffmpeg
-    // 2. Run YOLO inference on sampled frames
-    // 3. Filter detections by minConfidence
-    // 4. Extract bounding boxes as thumbnails
-    // 5. Return array of { type, confidence, timestamp, thumbnailPath }
-    
-    if (config.mockMode) {
-    // Mock a sample event (one per clip) for testing
-    console.log('(mock) Scanning:', clipPath);
-    const now = new Date().toISOString();
-    return [{
-        type: 'cat',
-        confidence: 0.82,
-        colour: 'unknown',
-        timestamp: now,
-        thumbnailPath: null
-    }];
+function pruneScannerState() {
+    if (!scannerState.processedClips) {
+        scannerState.processedClips = {};
+        return;
     }
-    
-    return [];
+
+    const cutoff = Date.now() - SCANNER_STATE_RETENTION_MS;
+    for (const [clipPath, entry] of Object.entries(scannerState.processedClips)) {
+        const processedAt = entry && entry.processedAt ? new Date(entry.processedAt).getTime() : 0;
+        if (!processedAt || processedAt < cutoff) {
+            delete scannerState.processedClips[clipPath];
+        }
+    }
+}
+
+function runCommand(command, args, options = {}) {
+    return new Promise((resolve, reject) => {
+        const { timeoutMs, ...spawnOptions } = options;
+        const child = spawn(command, args, spawnOptions);
+        let stdout = '';
+        let stderr = '';
+        let timedOut = false;
+        const timeout = timeoutMs
+            ? setTimeout(() => {
+                timedOut = true;
+                child.kill('SIGTERM');
+            }, timeoutMs)
+            : null;
+
+        if (child.stdout) {
+            child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+        }
+        if (child.stderr) {
+            child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+        }
+
+        child.on('error', err => {
+            if (timeout) clearTimeout(timeout);
+            reject(err);
+        });
+        child.on('close', code => {
+            if (timeout) clearTimeout(timeout);
+            if (timedOut) {
+                const err = new Error(`${command} timed out after ${timeoutMs}ms`);
+                err.code = 'ETIMEDOUT';
+                err.stdout = stdout;
+                err.stderr = stderr;
+                return reject(err);
+            }
+            if (code !== 0) {
+                const err = new Error(`${command} exited with code ${code}: ${stderr.trim()}`);
+                err.stdout = stdout;
+                err.stderr = stderr;
+                return reject(err);
+            }
+            resolve({ stdout, stderr });
+        });
+    });
+}
+
+function clipHash(clipPath) {
+    return crypto.createHash('sha1').update(clipPath).digest('hex').slice(0, 16);
+}
+
+async function extractSampledFrames(clipPath, frameDir) {
+    await fsAsync.rm(frameDir, { recursive: true, force: true });
+    await fsAsync.mkdir(frameDir, { recursive: true });
+
+    const outputPattern = path.join(frameDir, 'frame_%05d.jpg');
+    const fps = `fps=1/${config.sampleEverySeconds}`;
+    const args = [
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-i', clipPath,
+        '-vf', fps,
+        '-frames:v', String(config.maxFramesPerClip),
+        '-q:v', '3',
+        outputPattern
+    ];
+
+    await runCommand('ffmpeg', args);
+    const frames = (await fsAsync.readdir(frameDir))
+        .filter(file => /^frame_\d{5}\.jpg$/.test(file))
+        .sort()
+        .map(file => path.join(frameDir, file));
+
+    return frames;
+}
+
+async function runPythonDetector(frameDir) {
+    const args = [
+        config.pythonDetectorPath,
+        '--frame-dir', frameDir,
+        '--min-confidence', String(config.minConfidence),
+        '--sample-every-seconds', String(config.sampleEverySeconds),
+        '--classes', ...(config.classes || ['person', 'cat'])
+    ];
+
+    const { stdout } = await runCommand(config.pythonExecutable, args, { timeoutMs: DETECTOR_TIMEOUT_MS });
+    try {
+        return JSON.parse(stdout);
+    } catch (err) {
+        throw new Error(`Python detector returned invalid JSON: ${stdout.slice(0, 500)}`);
+    }
+}
+
+async function createThumbnail(clipPath, detection) {
+    if (!detection.framePath) return null;
+
+    const safeType = String(detection.type || 'event').replace(/[^a-z0-9_-]/gi, '').toLowerCase();
+    const frameTimestamp = String(detection.frameTimestampSeconds || 0).replace(/[^0-9]/g, '_');
+    const basename = `${clipHash(clipPath)}-${safeType}-${frameTimestamp}.jpg`;
+    const thumbnailPath = path.join(config.thumbnailDir, basename);
+    await fsAsync.copyFile(detection.framePath, thumbnailPath);
+    return thumbnailPath;
+}
+
+function dedupeDetections(detections) {
+    const byType = new Map();
+
+    for (const detection of detections) {
+        if (!detection || !config.classes.includes(detection.type)) continue;
+        if (Number(detection.confidence) < config.minConfidence) continue;
+
+        const existing = byType.get(detection.type);
+        if (!existing || Number(detection.confidence) > Number(existing.confidence)) {
+            byType.set(detection.type, detection);
+        }
+    }
+
+    return Array.from(byType.values());
+}
+
+async function detectEventsInClip(clipPath) {
+    if (config.mockMode) {
+        // Mock a sample event (one per clip) for testing
+        console.log('(mock) Scanning:', clipPath);
+        return {
+            detections: [{
+                type: 'cat',
+                confidence: 0.82,
+                colour: 'unknown',
+                frameTimestampSeconds: 0,
+                thumbnailPath: null
+            }],
+            failed: false
+        };
+    }
+
+    const frameDir = path.join(config.tempFrameDir, clipHash(clipPath));
+
+    try {
+        const frames = await extractSampledFrames(clipPath, frameDir);
+        if (frames.length === 0) {
+            console.log('ℹ No frames extracted:', clipPath);
+            return { detections: [], failed: false };
+        }
+
+        const detectorResult = await runPythonDetector(frameDir);
+        const deduped = dedupeDetections(detectorResult.detections || []);
+
+        for (const detection of deduped) {
+            detection.thumbnailPath = await createThumbnail(clipPath, detection);
+            detection.colour = detection.colour || 'unknown';
+        }
+
+        return { detections: deduped, failed: false };
+    } catch (err) {
+        const isDetectorTimeout = err.code === 'ETIMEDOUT';
+        const phase = isDetectorTimeout ? 'Python detector timed out' : 'Clip detection failed';
+        console.warn(`⚠ ${phase}; skipping clip: ${clipPath}`);
+        console.warn(`  ${err.message}`);
+        return { detections: [], failed: true, error: err.message };
+    } finally {
+        await fsAsync.rm(frameDir, { recursive: true, force: true }).catch(() => {});
+    }
 }
 
 // Log event to JSONL file
@@ -89,7 +263,7 @@ async function logEvent(event) {
     try {
         const eventLine = JSON.stringify(event) + '\n';
         await fsAsync.appendFile(config.eventLogPath, eventLine);
-        console.log('✓ Event logged:', event.type, 'at', event.timestamp);
+        console.log('✓ Event logged:', event.type, 'at', event.timestampUtc);
     } catch (err) {
         console.error('✗ Failed to log event:', err.message);
     }
@@ -105,7 +279,10 @@ function parseClipTimestamp(filename) {
     
     if (isNaN(utcDate.getTime())) return null;
     
-    // Return ISO 8601 string with Europe/London timezone offset
+    return utcDate;
+}
+
+function formatLocalDisplay(date) {
     const formatter = new Intl.DateTimeFormat('en-GB', {
         year: 'numeric',
         month: '2-digit',
@@ -116,13 +293,21 @@ function parseClipTimestamp(filename) {
         hour12: false,
         timeZone: 'Europe/London'
     });
-    
-    const localStr = formatter.format(utcDate);
-    // localStr is in format: DD/MM/YYYY, HH:mm:ss
-    // We need to handle BST offset manually
-    const offset = utcDate.toLocaleString('en-GB', { timeZone: 'Europe/London' }) < utcDate.toLocaleString('en-GB', { timeZone: 'UTC' }) ? '+01:00' : '+00:00';
-    
-    return utcDate.toISOString();
+
+    return formatter.format(date);
+}
+
+function getEventTimestamps(filename, detection) {
+    const clipStart = parseClipTimestamp(filename);
+    const offsetSeconds = Number(detection.frameTimestampSeconds || 0);
+    const eventDate = clipStart
+        ? new Date(clipStart.getTime() + offsetSeconds * 1000)
+        : new Date();
+
+    return {
+        timestampUtc: eventDate.toISOString(),
+        timestampLocalDisplay: formatLocalDisplay(eventDate)
+    };
 }
 
 // Scan clips in directory
@@ -142,12 +327,16 @@ async function scanDirectory(dirPath) {
             }
             
             // Run detection
-            const detections = await detectEventsInClip(clipPath);
+            const scanResult = await detectEventsInClip(clipPath);
+            const detections = scanResult.detections;
             
             // Log any detected events
             for (const detection of detections) {
+                const timestamps = getEventTimestamps(file, detection);
                 const event = {
-                    timestamp: parseClipTimestamp(file),
+                    timestampUtc: timestamps.timestampUtc,
+                    timestampLocalDisplay: timestamps.timestampLocalDisplay,
+                    timestamp: timestamps.timestampUtc,
                     camera: config.camera,
                     type: detection.type,
                     confidence: detection.confidence,
@@ -162,7 +351,9 @@ async function scanDirectory(dirPath) {
             // Mark as processed
             scannerState.processedClips[clipPath] = {
                 processedAt: new Date().toISOString(),
-                eventCount: detections.length
+                eventCount: detections.length,
+                failed: scanResult.failed || false,
+                error: scanResult.error || null
             };
             
             scanned++;
@@ -242,8 +433,49 @@ async function performScan() {
     scannerState.lastScan = Date.now();
 }
 
+async function scanSingleClip(clipPath) {
+    const scanResult = await detectEventsInClip(clipPath);
+    const detections = scanResult.detections;
+    const file = path.basename(clipPath);
+
+    for (const detection of detections) {
+        const timestamps = getEventTimestamps(file, detection);
+        const event = {
+            timestampUtc: timestamps.timestampUtc,
+            timestampLocalDisplay: timestamps.timestampLocalDisplay,
+            timestamp: timestamps.timestampUtc,
+            camera: config.camera,
+            type: detection.type,
+            confidence: detection.confidence,
+            colour: detection.colour || 'unknown',
+            clipPath: clipPath,
+            thumbnailPath: detection.thumbnailPath || null
+        };
+
+        await logEvent(event);
+    }
+
+    console.log(`✓ Manual clip scan complete: ${detections.length} event(s)`);
+}
+
 // Start scanner
-startScanner().catch(err => {
+async function main() {
+    const clipArgIndex = process.argv.indexOf('--clip');
+    if (clipArgIndex !== -1) {
+        const clipPath = process.argv[clipArgIndex + 1];
+        if (!clipPath) {
+            throw new Error('Usage: node event-scanner.js --clip /path/to/clip.mkv');
+        }
+
+        await loadConfig({ prepareWhenDisabled: true });
+        await scanSingleClip(path.resolve(clipPath));
+        return;
+    }
+
+    await startScanner();
+}
+
+main().catch(err => {
     console.error('✗ Fatal error:', err);
     process.exit(1);
 });

@@ -3,3 +3,13 @@ cameras.json
 storage.json
 test.mp4
 node_modules/
+events/
+scanner-state.json
+*.jpg
+*.jpeg
+*.png
+/tmp/
+simple-nvr-yolo/
+pycache/
+__pycache__/
+*.pyc

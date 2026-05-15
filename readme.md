@@ -30,6 +30,36 @@ If you just want to record video without the browser, you can choose to only run
 
 ---
 
+## Offline event detection
+The optional event scanner samples recorded MKV clips with `ffmpeg`, calls a Python YOLOv8 detector, and appends detections to the Event Log page. It currently detects `person` and `cat`.
+
+This requires Raspberry Pi OS 64-bit. Ultralytics on Pi depends on a compatible Python environment, so use a fresh Python 3 virtualenv and keep the detector dependencies isolated from the recorder/browser Node app.
+
+Install the Raspberry Pi 5 dependencies with:
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip python3-opencv ffmpeg
+python3 -m venv ~/simple-nvr-yolo
+~/simple-nvr-yolo/bin/pip install --upgrade pip
+~/simple-nvr-yolo/bin/pip install ultralytics opencv-python-headless
+```
+
+Then either run the scanner with the virtualenv active:
+```bash
+source ~/simple-nvr-yolo/bin/activate
+node event-scanner.js
+```
+
+Or run exactly one known clip manually:
+```bash
+source ~/simple-nvr-yolo/bin/activate
+node event-scanner.js --clip "/mnt/cctv/driveway/2026/05/15/2026-05-15T12 00 00.mkv"
+```
+
+Conservative defaults live in `event-detection.json`: `scanIntervalSeconds` is `300`, `sampleEverySeconds` is `30`, `maxFramesPerClip` is `8`, and sampled frames are written under `/tmp/simple-nvr-events`.
+
+---
+
 ## Notes about the code and methods used
 **Extra details about the implementation and ffmpeg configuration**
 

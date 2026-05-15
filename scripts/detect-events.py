@@ -21,6 +21,7 @@ def parse_args():
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--sample-every-seconds", type=float, default=10.0)
     parser.add_argument("--classes", nargs="+", default=["person", "cat"])
+    parser.add_argument("--include-all-classes", action="store_true")
     parser.add_argument("--model", default="yolov8n.pt")
     return parser.parse_args()
 
@@ -30,6 +31,14 @@ def frame_index(frame_path):
     if not match:
         return 1
     return int(match.group(1))
+
+
+def yolo_class_name(class_names, class_id):
+    if isinstance(class_names, dict):
+        return class_names.get(class_id, class_id)
+    if isinstance(class_names, list) and 0 <= class_id < len(class_names):
+        return class_names[class_id]
+    return class_id
 
 
 def main():
@@ -44,6 +53,7 @@ def main():
     with contextlib.redirect_stdout(sys.stderr):
         from ultralytics import YOLO
         model = YOLO(args.model)
+    class_names = model.names
     detections = []
 
     for frame_path in frames:
@@ -52,10 +62,11 @@ def main():
             continue
 
         with contextlib.redirect_stdout(sys.stderr):
+            predict_classes = None if args.include_all_classes else list(YOLO_CLASS_NAMES.keys())
             results = model.predict(
                 source=image,
                 conf=args.min_confidence,
-                classes=list(YOLO_CLASS_NAMES.keys()),
+                classes=predict_classes,
                 verbose=False,
             )
 
@@ -65,12 +76,13 @@ def main():
         for result in results:
             for box in result.boxes:
                 class_id = int(box.cls[0])
-                event_type = YOLO_CLASS_NAMES.get(class_id)
-                if event_type not in wanted_classes:
+                event_type = YOLO_CLASS_NAMES.get(class_id) or str(yolo_class_name(class_names, class_id))
+                if not args.include_all_classes and event_type not in wanted_classes:
                     continue
 
                 detections.append({
                     "type": event_type,
+                    "classId": class_id,
                     "confidence": round(float(box.conf[0]), 4),
                     "colour": "unknown",
                     "framePath": str(frame_path),

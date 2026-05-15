@@ -9,6 +9,7 @@ let config = {};
 let scannerState = {};
 const SCANNER_STATE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const DETECTOR_TIMEOUT_MS = 120 * 1000;
+const DEBUG_DETECTOR_MIN_CONFIDENCE = 0.01;
 
 // Initialize configuration
 async function loadConfig(options = {}) {
@@ -169,14 +170,21 @@ async function extractSampledFrames(clipPath, frameDir) {
     return frames;
 }
 
-async function runPythonDetector(frameDir) {
+async function runPythonDetector(frameDir, options = {}) {
+    const minConfidence = options.includeAllClasses
+        ? DEBUG_DETECTOR_MIN_CONFIDENCE
+        : config.minConfidence;
     const args = [
         config.pythonDetectorPath,
         '--frame-dir', frameDir,
-        '--min-confidence', String(config.minConfidence),
+        '--min-confidence', String(minConfidence),
         '--sample-every-seconds', String(config.sampleEverySeconds),
         '--classes', ...(config.classes || ['person', 'cat'])
     ];
+
+    if (options.includeAllClasses) {
+        args.push('--include-all-classes');
+    }
 
     const { stdout } = await runCommand(config.pythonExecutable, args, { timeoutMs: DETECTOR_TIMEOUT_MS });
     try {
@@ -213,7 +221,18 @@ function dedupeDetections(detections) {
     return Array.from(byType.values());
 }
 
-async function detectEventsInClip(clipPath) {
+async function writeJsonFile(filePath, value) {
+    await fsAsync.writeFile(filePath, JSON.stringify(value, null, 2));
+}
+
+function getDebugDir(clipPath) {
+    return path.join(path.dirname(config.eventLogPath), 'debug', clipHash(clipPath));
+}
+
+async function detectEventsInClip(clipPath, options = {}) {
+    const debug = Boolean(options.debug);
+    const debugDir = debug ? getDebugDir(clipPath) : null;
+
     if (config.mockMode) {
         // Mock a sample event (one per clip) for testing
         console.log('(mock) Scanning:', clipPath);
@@ -229,16 +248,30 @@ async function detectEventsInClip(clipPath) {
         };
     }
 
-    const frameDir = path.join(config.tempFrameDir, clipHash(clipPath));
+    const frameDir = debug ? debugDir : path.join(config.tempFrameDir, clipHash(clipPath));
 
     try {
+        if (debug) {
+            await fsAsync.rm(debugDir, { recursive: true, force: true });
+            await fsAsync.mkdir(debugDir, { recursive: true });
+        }
+
         const frames = await extractSampledFrames(clipPath, frameDir);
         if (frames.length === 0) {
             console.log('ℹ No frames extracted:', clipPath);
-            return { detections: [], failed: false };
+            const emptyResult = { detections: [] };
+            if (debug) {
+                await writeJsonFile(path.join(debugDir, 'raw-detections.json'), emptyResult);
+                await writeJsonFile(path.join(debugDir, 'deduped-detections.json'), []);
+            }
+            return { detections: [], failed: false, debugDir };
         }
 
-        const detectorResult = await runPythonDetector(frameDir);
+        const detectorResult = await runPythonDetector(frameDir, { includeAllClasses: debug });
+        if (debug) {
+            await writeJsonFile(path.join(debugDir, 'raw-detections.json'), detectorResult);
+        }
+
         const deduped = dedupeDetections(detectorResult.detections || []);
 
         for (const detection of deduped) {
@@ -246,15 +279,24 @@ async function detectEventsInClip(clipPath) {
             detection.colour = detection.colour || 'unknown';
         }
 
-        return { detections: deduped, failed: false };
+        if (debug) {
+            await writeJsonFile(path.join(debugDir, 'deduped-detections.json'), deduped);
+        }
+
+        return { detections: deduped, failed: false, debugDir };
     } catch (err) {
         const isDetectorTimeout = err.code === 'ETIMEDOUT';
         const phase = isDetectorTimeout ? 'Python detector timed out' : 'Clip detection failed';
         console.warn(`⚠ ${phase}; skipping clip: ${clipPath}`);
         console.warn(`  ${err.message}`);
-        return { detections: [], failed: true, error: err.message };
+        if (debug && debugDir) {
+            await writeJsonFile(path.join(debugDir, 'debug-error.json'), { error: err.message }).catch(() => {});
+        }
+        return { detections: [], failed: true, error: err.message, debugDir };
     } finally {
-        await fsAsync.rm(frameDir, { recursive: true, force: true }).catch(() => {});
+        if (!debug) {
+            await fsAsync.rm(frameDir, { recursive: true, force: true }).catch(() => {});
+        }
     }
 }
 
@@ -433,8 +475,8 @@ async function performScan() {
     scannerState.lastScan = Date.now();
 }
 
-async function scanSingleClip(clipPath) {
-    const scanResult = await detectEventsInClip(clipPath);
+async function scanSingleClip(clipPath, options = {}) {
+    const scanResult = await detectEventsInClip(clipPath, { debug: options.debug });
     const detections = scanResult.detections;
     const file = path.basename(clipPath);
 
@@ -456,19 +498,23 @@ async function scanSingleClip(clipPath) {
     }
 
     console.log(`✓ Manual clip scan complete: ${detections.length} event(s)`);
+    if (options.debug && scanResult.debugDir) {
+        console.log(`✓ Debug output: ${scanResult.debugDir}`);
+    }
 }
 
 // Start scanner
 async function main() {
     const clipArgIndex = process.argv.indexOf('--clip');
     if (clipArgIndex !== -1) {
+        const debug = process.argv.includes('--debug');
         const clipPath = process.argv[clipArgIndex + 1];
         if (!clipPath) {
             throw new Error('Usage: node event-scanner.js --clip /path/to/clip.mkv');
         }
 
         await loadConfig({ prepareWhenDisabled: true });
-        await scanSingleClip(path.resolve(clipPath));
+        await scanSingleClip(path.resolve(clipPath), { debug });
         return;
     }
 

@@ -1,6 +1,7 @@
 const path = require('path');
 require('dotenv').config();
 const fsAsync = require('fs').promises;
+const fs = require('fs');
 
 const express = require('express');
 const app = express();
@@ -75,6 +76,38 @@ app.set('views', 'views');
 app.use(require('./video-file-server'));
 
 app.use(express.static('public'));
+
+// Serve event thumbnails and event log files if event-detection.json exists
+try {
+  const eventCfg = require('./event-detection.json');
+  if (eventCfg && eventCfg.thumbnailDir) {
+    // expose thumbnails at /events/thumbnails/<file>
+    app.use('/events/thumbnails', express.static(eventCfg.thumbnailDir));
+  }
+} catch (err) {
+  // config missing -> leave routes untouched
+}
+
+// Event Log route
+app.get('/events', async (req, res) => {
+  const events = [];
+  try {
+    const cfg = require('./event-detection.json');
+    if (cfg.enabled && fsAsync) {
+      if (fs.existsSync(cfg.eventLogPath)) {
+        const logData = await fsAsync.readFile(cfg.eventLogPath, 'utf8');
+        const lines = logData.split('\\n').filter(l => l.trim());
+        for (const line of lines) {
+          try { events.push(JSON.parse(line)); } catch (e) { /* skip malformed */ }
+        }
+        events.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+      }
+    }
+  } catch (err) {
+    console.log('Event log not available:', err.message);
+  }
+  res.render('event-log', { pageTitle: 'Event Log', events });
+});
 
 app.get('*.:ext', async (req, res, next) => {
     const filetype = req.params.ext;

@@ -1,0 +1,55 @@
+<%- include('includes/head.ejs') %>
+</head>
+
+<body class="d-flex flex-column h-100">
+
+    <%- include('includes/header.ejs') %>
+
+    <div class="container py-4">
+        <h2 class="mb-4">Event Log</h2>
+
+        <% if (events.length === 0) { %>
+            <div class="alert alert-info">
+                No events detected yet.
+            </div>
+        <% } else { %>
+            <div class="list-group">
+                <% for (let i = 0; i < events.length; i++) { const event = events[i]; %>
+                <div class="list-group-item">
+                    <div style="display: flex; align-items: flex-start; gap: 1rem;">
+                        <% if (event.thumbnailPath) { %>
+                            <img src="/events/thumbnails/<%= require('path').basename(event.thumbnailPath) %>" alt="Event thumbnail" style="width:100px;height:100px;object-fit:cover;border-radius:4px;">
+                        <% } %>
+                        <div style="flex: 1;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <h5 style="margin: 0; text-transform: capitalize;">
+                                    <% if (event.type === 'person') { %>
+                                        👤 Person
+                                    <% } else if (event.type === 'cat') { %>
+                                        🐱 Cat
+                                    <% } else { %>
+                                        <%= event.type %>
+                                    <% } %>
+                                </h5>
+                                <span class="badge badge-primary"><%= Math.round(event.confidence * 100) %>%</span>
+                            </div>
+                            <div class="text-muted small">
+                                <div><strong>Time:</strong> <%= event.timestamp %></div>
+                                <div><strong>Camera:</strong> <%= event.camera %></div>
+                                <% if (event.colour && event.colour !== 'unknown') { %>
+                                    <div><strong>Color:</strong> <%= event.colour %></div>
+                                <% } %>
+                            </div>
+                            <div style="margin-top: 0.5rem;">
+                                <a href="<%= event.clipPath %>" class="btn btn-sm btn-outline-primary">View Clip</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <% } %>
+            </div>
+        <% } %>
+    </div>
+
+    <%- include('includes/footer.ejs') %>
+    <%- include('includes/end.ejs') %>

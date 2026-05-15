@@ -1,0 +1,12 @@
+{
+  "enabled": false,
+  "rootpath": "/mnt/cctv",
+  "camera": "driveway",
+  "classes": ["person", "cat"],
+  "scanIntervalSeconds": 60,
+  "sampleEverySeconds": 10,
+  "minConfidence": 0.5,
+  "eventLogPath": "/mnt/cctv/events/events.jsonl",
+  "thumbnailDir": "/mnt/cctv/events/thumbnails",
+  "mockMode": false
+}

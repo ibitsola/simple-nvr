@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 import cv2
-from ultralytics import YOLO
 
 
 YOLO_CLASS_NAMES = {
@@ -39,7 +38,11 @@ def main():
     frame_dir = Path(args.frame_dir)
     frames = sorted(frame_dir.glob("frame_*.jpg"))
 
+    # Ultralytics may print first-run setup/settings messages during import and
+    # model load. Keep all third-party chatter away from stdout; Node parses
+    # stdout as a single JSON object.
     with contextlib.redirect_stdout(sys.stderr):
+        from ultralytics import YOLO
         model = YOLO(args.model)
     detections = []
 
@@ -75,7 +78,8 @@ def main():
                     "frameTimestampSeconds": frame_timestamp_seconds,
                 })
 
-    print(json.dumps({"detections": detections}, separators=(",", ":")))
+    sys.stdout.write(json.dumps({"detections": detections}, separators=(",", ":")))
+    sys.stdout.write("\n")
 
 
 if __name__ == "__main__":

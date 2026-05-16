@@ -302,6 +302,12 @@ async function detectEventsInClip(clipPath, options = {}) {
     }
 }
 
+function getDisplayType(type) {
+    if (type === 'cat' || type === 'dog') return 'Animal';
+    if (!type) return 'Unknown';
+    return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
 // Log event to JSONL file
 async function logEvent(event) {
     try {
@@ -383,6 +389,7 @@ async function scanDirectory(dirPath) {
                     timestamp: timestamps.timestampUtc,
                     camera: config.camera,
                     type: detection.type,
+                    displayType: getDisplayType(detection.type),
                     confidence: detection.confidence,
                     colour: detection.colour || 'unknown',
                     clipPath: clipPath,
@@ -490,6 +497,7 @@ async function scanSingleClip(clipPath, options = {}) {
             timestamp: timestamps.timestampUtc,
             camera: config.camera,
             type: detection.type,
+            displayType: getDisplayType(detection.type),
             confidence: detection.confidence,
             colour: detection.colour || 'unknown',
             clipPath: clipPath,

@@ -15,6 +15,7 @@
         <% } else { %>
             <div class="list-group">
                 <% for (let i = 0; i < events.length; i++) { const event = events[i]; %>
+                <% const displayType = event.displayType || (event.type === 'cat' || event.type === 'dog' ? 'Animal' : event.type ? event.type.charAt(0).toUpperCase() + event.type.slice(1) : 'Unknown'); %>
                 <div class="list-group-item">
                     <div style="display: flex; align-items: flex-start; gap: 1rem;">
                         <% if (event.thumbnailPath) { %>
@@ -22,14 +23,9 @@
                         <% } %>
                         <div style="flex: 1;">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <h5 style="margin: 0; text-transform: capitalize;">
-                                    <% if (event.type === 'person') { %>
-                                        👤 Person
-                                    <% } else if (event.type === 'cat') { %>
-                                        🐱 Cat
-                                    <% } else { %>
-                                        <%= event.type %>
-                                    <% } %>
+                                <h5 style="margin: 0;">
+                                    <%= displayType %>
+                                    <small class="text-muted" style="font-size: 0.7em; font-weight: normal;">YOLO: <%= event.type %></small>
                                 </h5>
                                 <span class="badge badge-primary"><%= Math.round(event.confidence * 100) %>%</span>
                             </div>
@@ -37,7 +33,7 @@
                                 <div><strong>Time:</strong> <%= event.timestampLocalDisplay || event.timestampUtc || event.timestamp %></div>
                                 <div><strong>Camera:</strong> <%= event.camera %></div>
                                 <% if (event.colour && event.colour !== 'unknown') { %>
-                                    <div><strong>Color:</strong> <%= event.colour %></div>
+                                    <div><strong>Colour:</strong> <%= event.colour %></div>
                                 <% } %>
                             </div>
                             <div style="margin-top: 0.5rem;">

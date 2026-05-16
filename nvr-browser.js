@@ -45,9 +45,9 @@ function parseVideoDisplayName(filename) {
     
     // Convert to Europe/London timezone (handles BST/GMT automatically)
     const formatter = new Intl.DateTimeFormat('en-GB', {
-        hour: 'numeric',
+        hour: '2-digit',
         minute: '2-digit',
-        hour12: true,
+        hour12: false,
         timeZone: 'Europe/London'
     });
     

@@ -27,6 +27,7 @@ async function loadConfig(options = {}) {
         config.tempFrameDir = config.tempFrameDir || '/tmp/simple-nvr-events';
         config.pythonExecutable = config.pythonExecutable || 'python3';
         config.pythonDetectorPath = config.pythonDetectorPath || 'scripts/detect-events.py';
+        config.yoloModel = config.yoloModel || 'yolov8n.pt';
 
         if (!path.isAbsolute(config.pythonDetectorPath)) {
             config.pythonDetectorPath = path.join(__dirname, config.pythonDetectorPath);
@@ -179,7 +180,8 @@ async function runPythonDetector(frameDir, options = {}) {
         '--frame-dir', frameDir,
         '--min-confidence', String(minConfidence),
         '--sample-every-seconds', String(config.sampleEverySeconds),
-        '--classes', ...(config.classes || ['person', 'cat'])
+        '--classes', ...(config.classes || ['person', 'cat']),
+        '--model', config.yoloModel
     ];
 
     if (options.includeAllClasses) {

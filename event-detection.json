@@ -9,6 +9,7 @@
   "tempFrameDir": "/tmp/simple-nvr-events",
   "pythonExecutable": "python3",
   "pythonDetectorPath": "scripts/detect-events.py",
+  "yoloModel": "yolov8s.pt",
   "minConfidence": 0.5,
   "eventLogPath": "/mnt/cctv/events/events.jsonl",
   "thumbnailDir": "/mnt/cctv/events/thumbnails",

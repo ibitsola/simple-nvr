@@ -10,6 +10,8 @@
   "pythonExecutable": "python3",
   "pythonDetectorPath": "scripts/detect-events.py",
   "yoloModel": "yolov8s.pt",
+  "yoloImageSize": 960,
+  "pythonTimeoutMs": 180000,
   "minConfidence": 0.25,
   "classConfidence": {
     "person": 0.6,

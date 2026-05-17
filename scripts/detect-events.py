@@ -12,6 +12,7 @@ import cv2
 YOLO_CLASS_NAMES = {
     0: "person",
     15: "cat",
+    16: "dog",
 }
 
 
@@ -23,6 +24,7 @@ def parse_args():
     parser.add_argument("--classes", nargs="+", default=["person", "cat"])
     parser.add_argument("--include-all-classes", action="store_true")
     parser.add_argument("--model", default="yolov8n.pt")
+    parser.add_argument("--imgsz", type=int, default=640)
     return parser.parse_args()
 
 
@@ -67,6 +69,7 @@ def main():
                 source=image,
                 conf=args.min_confidence,
                 classes=predict_classes,
+                imgsz=args.imgsz,
                 verbose=False,
             )
 

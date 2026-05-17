@@ -30,6 +30,8 @@ async function loadConfig(options = {}) {
         config.yoloModel = config.yoloModel || 'yolov8n.pt';
         config.retentionDays = Number(config.retentionDays || 30);
         config.classConfidence = config.classConfidence || {};
+        config.yoloImageSize = Number(config.yoloImageSize || 640);
+        config.pythonTimeoutMs = Number(config.pythonTimeoutMs || DETECTOR_TIMEOUT_MS);
 
         if (!path.isAbsolute(config.pythonDetectorPath)) {
             config.pythonDetectorPath = path.join(__dirname, config.pythonDetectorPath);
@@ -183,14 +185,15 @@ async function runPythonDetector(frameDir, options = {}) {
         '--min-confidence', String(minConfidence),
         '--sample-every-seconds', String(config.sampleEverySeconds),
         '--classes', ...(config.classes || ['person', 'cat']),
-        '--model', config.yoloModel
+        '--model', config.yoloModel,
+        '--imgsz', String(config.yoloImageSize)
     ];
 
     if (options.includeAllClasses) {
         args.push('--include-all-classes');
     }
 
-    const { stdout } = await runCommand(config.pythonExecutable, args, { timeoutMs: DETECTOR_TIMEOUT_MS });
+    const { stdout } = await runCommand(config.pythonExecutable, args, { timeoutMs: config.pythonTimeoutMs });
     try {
         return JSON.parse(stdout);
     } catch (err) {

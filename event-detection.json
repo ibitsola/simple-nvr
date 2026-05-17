@@ -11,6 +11,11 @@
   "pythonDetectorPath": "scripts/detect-events.py",
   "yoloModel": "yolov8s.pt",
   "minConfidence": 0.25,
+  "classConfidence": {
+    "person": 0.6,
+    "cat": 0.25,
+    "dog": 0.25
+  },
   "eventLogPath": "/mnt/cctv/events/events.jsonl",
   "thumbnailDir": "/mnt/cctv/events/thumbnails",
   "retentionDays": 30,

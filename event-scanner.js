@@ -29,6 +29,7 @@ async function loadConfig(options = {}) {
         config.pythonDetectorPath = config.pythonDetectorPath || 'scripts/detect-events.py';
         config.yoloModel = config.yoloModel || 'yolov8n.pt';
         config.retentionDays = Number(config.retentionDays || 30);
+        config.classConfidence = config.classConfidence || {};
 
         if (!path.isAbsolute(config.pythonDetectorPath)) {
             config.pythonDetectorPath = path.join(__dirname, config.pythonDetectorPath);
@@ -219,12 +220,19 @@ async function createThumbnail(clipPath, detection, thumbnailDir) {
     return thumbnailPath;
 }
 
+function confidenceThreshold(type) {
+    if (config.classConfidence && config.classConfidence[type] !== undefined) {
+        return Number(config.classConfidence[type]);
+    }
+    return config.minConfidence;
+}
+
 function dedupeDetections(detections) {
     const byType = new Map();
 
     for (const detection of detections) {
         if (!detection || !config.classes.includes(detection.type)) continue;
-        if (Number(detection.confidence) < config.minConfidence) continue;
+        if (Number(detection.confidence) < confidenceThreshold(detection.type)) continue;
 
         const existing = byType.get(detection.type);
         if (!existing || Number(detection.confidence) > Number(existing.confidence)) {

@@ -8,13 +8,18 @@
     <div class="container py-4">
         <h2 class="mb-4">Event Log</h2>
 
-        <% if (events.length === 0) { %>
+        <% const totalEvents = groupedEvents.reduce((n, g) => n + g.events.length, 0); %>
+        <% if (totalEvents === 0) { %>
             <div class="alert alert-info">
                 No events detected yet.
             </div>
         <% } else { %>
-            <div class="list-group">
-                <% for (let i = 0; i < events.length; i++) { const event = events[i]; %>
+            <% for (const group of groupedEvents) { %>
+            <h5 class="mt-4 mb-2 text-secondary">
+                <%= group.label %> &mdash; <%= group.events.length %> event<%= group.events.length !== 1 ? 's' : '' %>
+            </h5>
+            <div class="list-group mb-3">
+                <% for (const event of group.events) { %>
                 <% const displayType = event.displayType || (event.type === 'cat' || event.type === 'dog' ? 'Animal' : event.type ? event.type.charAt(0).toUpperCase() + event.type.slice(1) : 'Unknown'); %>
                 <div class="list-group-item">
                     <div style="display: flex; align-items: flex-start; gap: 1rem;">
@@ -51,6 +56,7 @@
                 </div>
                 <% } %>
             </div>
+            <% } %>
         <% } %>
     </div>
 

@@ -13,5 +13,6 @@
   "minConfidence": 0.25,
   "eventLogPath": "/mnt/cctv/events/events.jsonl",
   "thumbnailDir": "/mnt/cctv/events/thumbnails",
+  "retentionDays": 30,
   "mockMode": false
 }

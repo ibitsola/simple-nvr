@@ -28,6 +28,7 @@ async function loadConfig(options = {}) {
         config.pythonExecutable = config.pythonExecutable || 'python3';
         config.pythonDetectorPath = config.pythonDetectorPath || 'scripts/detect-events.py';
         config.yoloModel = config.yoloModel || 'yolov8n.pt';
+        config.retentionDays = Number(config.retentionDays || 30);
 
         if (!path.isAbsolute(config.pythonDetectorPath)) {
             config.pythonDetectorPath = path.join(__dirname, config.pythonDetectorPath);
@@ -205,7 +206,16 @@ async function createThumbnail(clipPath, detection, thumbnailDir) {
     const frameTimestamp = String(detection.frameTimestampSeconds || 0).replace(/[^0-9]/g, '_');
     const basename = `${clipHash(clipPath)}-${safeType}-${frameTimestamp}.jpg`;
     const thumbnailPath = path.join(dir, basename);
-    await fsAsync.copyFile(detection.framePath, thumbnailPath);
+    // Resize to ~300px wide and compress as JPEG for display/storage.
+    // YOLO inference already ran on the full-size extracted frame above.
+    await runCommand('ffmpeg', [
+        '-hide_banner', '-loglevel', 'error',
+        '-i', detection.framePath,
+        '-vf', 'scale=300:-1',
+        '-q:v', '5',
+        '-y',
+        thumbnailPath
+    ]);
     return thumbnailPath;
 }
 
@@ -350,15 +360,15 @@ async function logEvent(event) {
         await fsAsync.mkdir(path.dirname(dayLogPath), { recursive: true });
 
         if (event.eventId && await isDuplicateEvent(dayLogPath, event.eventId)) {
-            console.log('Event already logged; skipping:', event.eventId);
-            return;
+            return false; // duplicate
         }
 
         const eventLine = JSON.stringify(event) + '\n';
         await fsAsync.appendFile(dayLogPath, eventLine);
-        console.log('✓ Event logged:', event.type, 'at', event.timestampUtc);
+        return true; // logged
     } catch (err) {
         console.error('✗ Failed to log event:', err.message);
+        return false;
     }
 }
 
@@ -411,27 +421,38 @@ function getEventTimestamps(filename, detection) {
     };
 }
 
-// Scan clips in directory
-async function scanDirectory(dirPath) {
+// Scan clips in a single day directory.
+// Returns { found, skipped, scanned, eventsLogged, duplicatesSkipped }.
+async function scanDirectory(dirPath, options = {}) {
+    const debug = Boolean(options.debug);
+    const stats = { found: 0, skipped: 0, scanned: 0, eventsLogged: 0, duplicatesSkipped: 0 };
     try {
         const files = await fsAsync.readdir(dirPath);
-        let scanned = 0;
-        
-        for (const file of files) {
-            if (!file.endsWith('.mkv')) continue;
-            
+        const allMkvFiles = files.filter(f => f.endsWith('.mkv'));
+        stats.found = allMkvFiles.length;
+        if (stats.found === 0) return stats;
+
+        // Only scan output.mkv when no individual 5-minute clips exist for this day
+        const hasRegularClips = allMkvFiles.some(f => f !== 'output.mkv');
+
+        for (const file of allMkvFiles) {
             const clipPath = path.join(dirPath, file);
-            
-            // Skip if already processed
-            if (scannerState.processedClips[clipPath]) {
+
+            if (file === 'output.mkv' && hasRegularClips) {
+                console.log(`  → Skip output.mkv (individual clips exist): ${dirPath}`);
+                stats.skipped++;
                 continue;
             }
-            
-            // Run detection
-            const scanResult = await detectEventsInClip(clipPath);
+
+            if (scannerState.processedClips[clipPath]) {
+                stats.skipped++;
+                continue;
+            }
+
+            console.log(`  → Scanning: ${file}`);
+            const scanResult = await detectEventsInClip(clipPath, { debug });
             const detections = scanResult.detections;
-            
-            // Log any detected events
+
             for (const detection of detections) {
                 const timestamps = getEventTimestamps(file, detection);
                 const eventId = makeEventId(config.camera, timestamps.timestampUtc, detection.type, clipPath);
@@ -452,35 +473,37 @@ async function scanDirectory(dirPath) {
                     dailyClipPath: path.join(path.dirname(clipPath), 'output.mkv'),
                     thumbnailPath: detection.thumbnailPath || null
                 };
-                
-                await logEvent(event);
+
+                const logged = await logEvent(event);
+                if (logged) {
+                    stats.eventsLogged++;
+                    console.log(`    ✓ ${event.type} (${Math.round(event.confidence * 100)}%) at ${event.timestampLocalDisplay}`);
+                } else {
+                    stats.duplicatesSkipped++;
+                }
             }
-            
-            // Mark as processed
+
             scannerState.processedClips[clipPath] = {
                 processedAt: new Date().toISOString(),
                 eventCount: detections.length,
                 failed: scanResult.failed || false,
                 error: scanResult.error || null
             };
-            
-            scanned++;
-            
-            // Save state periodically
-            if (scanned % 10 === 0) {
+
+            stats.scanned++;
+            if (stats.scanned % 10 === 0) {
                 await saveState();
             }
         }
-        
-        if (scanned > 0) {
-            console.log(`✓ Scanned ${scanned} new clips`);
+
+        if (stats.scanned > 0) {
             await saveState();
         }
-        
-        return scanned;
+
+        return stats;
     } catch (err) {
         console.error('✗ Directory scan failed:', err.message);
-        return 0;
+        return stats;
     }
 }
 
@@ -506,39 +529,78 @@ async function startScanner() {
     setInterval(performScan, config.scanIntervalSeconds * 1000);
 }
 
+// Delete per-day event folders older than retentionDays
+async function cleanupOldEvents() {
+    const retentionDays = config.retentionDays;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - retentionDays);
+    const cutoffStr = localDateString(cutoff); // YYYY-MM-DD in Europe/London
+    const eventsBaseDir = path.dirname(config.eventLogPath);
+    let deleted = 0;
+
+    try {
+        const years = (await fsAsync.readdir(eventsBaseDir, { withFileTypes: true }))
+            .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name));
+        for (const year of years) {
+            const months = (await fsAsync.readdir(path.join(eventsBaseDir, year.name), { withFileTypes: true }))
+                .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
+            for (const month of months) {
+                const days = (await fsAsync.readdir(path.join(eventsBaseDir, year.name, month.name), { withFileTypes: true }))
+                    .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
+                for (const day of days) {
+                    const dateKey = `${year.name}-${month.name}-${day.name}`;
+                    if (dateKey < cutoffStr) {
+                        const dayDir = path.join(eventsBaseDir, year.name, month.name, day.name);
+                        await fsAsync.rm(dayDir, { recursive: true, force: true });
+                        console.log(`✓ Deleted old event folder: ${dateKey}`);
+                        deleted++;
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('⚠ Event retention cleanup failed:', err.message);
+    }
+
+    if (deleted > 0) {
+        console.log(`✓ Retention cleanup: ${deleted} old event day folder(s) removed (retention: ${retentionDays} days)`);
+    }
+    return deleted;
+}
+
 async function performScan() {
     const cameraDir = path.join(config.rootpath, config.camera);
-    
+    const totals = { found: 0, skipped: 0, scanned: 0, eventsLogged: 0, duplicatesSkipped: 0 };
+    console.log(`\n--- Scan started: ${new Date().toISOString()} ---`);
+
     try {
-        // Scan YYYY/MM/DD directory structure
-        const years = await fsAsync.readdir(cameraDir);
-        
+        const years = (await fsAsync.readdir(cameraDir, { withFileTypes: true }))
+            .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name));
         for (const year of years) {
-            const yearPath = path.join(cameraDir, year);
-            const yearStats = await fsAsync.stat(yearPath);
-            if (!yearStats.isDirectory()) continue;
-            
-            const months = await fsAsync.readdir(yearPath);
+            const months = (await fsAsync.readdir(path.join(cameraDir, year.name), { withFileTypes: true }))
+                .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
             for (const month of months) {
-                const monthPath = path.join(yearPath, month);
-                const monthStats = await fsAsync.stat(monthPath);
-                if (!monthStats.isDirectory()) continue;
-                
-                const days = await fsAsync.readdir(monthPath);
+                const days = (await fsAsync.readdir(path.join(cameraDir, year.name, month.name), { withFileTypes: true }))
+                    .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
                 for (const day of days) {
-                    const dayPath = path.join(monthPath, day);
-                    const dayStats = await fsAsync.stat(dayPath);
-                    if (!dayStats.isDirectory()) continue;
-                    
-                    await scanDirectory(dayPath);
+                    const dayPath = path.join(cameraDir, year.name, month.name, day.name);
+                    const result = await scanDirectory(dayPath);
+                    totals.found += result.found;
+                    totals.skipped += result.skipped;
+                    totals.scanned += result.scanned;
+                    totals.eventsLogged += result.eventsLogged;
+                    totals.duplicatesSkipped += result.duplicatesSkipped;
                 }
             }
         }
     } catch (err) {
         console.error('✗ Scan failed:', err.message);
     }
-    
+
+    console.log(`--- Scan complete: found ${totals.found}, skipped ${totals.skipped}, scanned ${totals.scanned}, events logged ${totals.eventsLogged}, duplicates skipped ${totals.duplicatesSkipped} ---`);
     scannerState.lastScan = Date.now();
+    await saveState();
+    await cleanupOldEvents();
 }
 
 async function scanSingleClip(clipPath, options = {}) {
@@ -578,16 +640,37 @@ async function scanSingleClip(clipPath, options = {}) {
 
 // Start scanner
 async function main() {
+    const debug = process.argv.includes('--debug');
+
     const clipArgIndex = process.argv.indexOf('--clip');
     if (clipArgIndex !== -1) {
-        const debug = process.argv.includes('--debug');
         const clipPath = process.argv[clipArgIndex + 1];
         if (!clipPath) {
-            throw new Error('Usage: node event-scanner.js --clip /path/to/clip.mkv');
+            throw new Error('Usage: node event-scanner.js --clip /path/to/clip.mkv [--debug]');
         }
-
         await loadConfig({ prepareWhenDisabled: true });
+        await loadState();
         await scanSingleClip(path.resolve(clipPath), { debug });
+        return;
+    }
+
+    const dateArgIndex = process.argv.indexOf('--date');
+    if (dateArgIndex !== -1) {
+        const dateStr = process.argv[dateArgIndex + 1];
+        if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+            throw new Error('Usage: node event-scanner.js --date YYYY-MM-DD [--debug]');
+        }
+        await loadConfig({ prepareWhenDisabled: true });
+        await loadState();
+        const [year, month, day] = dateStr.split('-');
+        const dayPath = path.join(config.rootpath, config.camera, year, month, day);
+        if (!fs.existsSync(dayPath)) {
+            throw new Error(`Day directory not found: ${dayPath}`);
+        }
+        console.log(`Manual day scan: ${dateStr} — ${dayPath}`);
+        const result = await scanDirectory(dayPath, { debug });
+        console.log(`Scan complete: found ${result.found}, skipped ${result.skipped}, scanned ${result.scanned}, events logged ${result.eventsLogged}, duplicates skipped ${result.duplicatesSkipped}`);
+        await saveState();
         return;
     }
 

@@ -18,8 +18,8 @@
                 <% const displayType = event.displayType || (event.type === 'cat' || event.type === 'dog' ? 'Animal' : event.type ? event.type.charAt(0).toUpperCase() + event.type.slice(1) : 'Unknown'); %>
                 <div class="list-group-item">
                     <div style="display: flex; align-items: flex-start; gap: 1rem;">
-                        <% if (event.thumbnailFile) { %>
-                            <img src="/events/thumbnails/<%= event.thumbnailFile %>" alt="Event thumbnail" style="width:100px;height:100px;object-fit:cover;border-radius:4px;">
+                        <% if (event.thumbnailUrl) { %>
+                            <img src="<%= event.thumbnailUrl %>" alt="Event thumbnail" style="width:100px;height:100px;object-fit:cover;border-radius:4px;">
                         <% } %>
                         <div style="flex: 1;">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -37,7 +37,14 @@
                                 <% } %>
                             </div>
                             <div style="margin-top: 0.5rem;">
-                                <a href="<%= event.clipPath %>" class="btn btn-sm btn-outline-primary">View Clip</a>
+                                <% if (event.videoHref) { %>
+                                    <a href="<%= event.videoHref %>" class="btn btn-sm btn-outline-primary">View Clip</a>
+                                    <% if (event.usingDailyFallback) { %>
+                                        <small class="text-muted ml-1">daily recording</small>
+                                    <% } %>
+                                <% } else { %>
+                                    <span class="text-muted small">Clip unavailable</span>
+                                <% } %>
                             </div>
                         </div>
                     </div>

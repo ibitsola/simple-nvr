@@ -77,12 +77,11 @@ app.use(require('./video-file-server'));
 
 app.use(express.static('public'));
 
-// Serve event thumbnails and event log files if event-detection.json exists
+// Serve event assets (flat + per-day thumbnails) from the events base directory
 try {
   const eventCfg = require('./event-detection.json');
-  if (eventCfg && eventCfg.thumbnailDir) {
-    // expose thumbnails at /events/thumbnails/<file>
-    app.use('/events/thumbnails', express.static(eventCfg.thumbnailDir));
+  if (eventCfg && eventCfg.eventLogPath) {
+    app.use('/events', express.static(path.dirname(eventCfg.eventLogPath)));
   }
 } catch (err) {
   // config missing -> leave routes untouched
@@ -91,18 +90,90 @@ try {
 // Event Log route
 app.get('/events', async (req, res) => {
   const events = [];
+  const seen = new Set();
+
+  function dedupeKey(e) {
+    return e.eventId || `${e.timestampUtc || e.timestamp}|${e.type}|${e.clipPath || ''}|${e.thumbnailPath || ''}`;
+  }
+
+  function readJsonl(data) {
+    return data.split('\n').filter(l => l.trim())
+      .map(l => { try { return JSON.parse(l); } catch (e) { return null; } })
+      .filter(Boolean);
+  }
+
   try {
     const cfg = require('./event-detection.json');
-    if (cfg.eventLogPath && fs.existsSync(cfg.eventLogPath)) {
-      const logData = await fsAsync.readFile(cfg.eventLogPath, 'utf8');
-      const lines = logData.split('\n').filter(l => l.trim());
-      for (const line of lines) {
-        try { events.push(JSON.parse(line)); } catch (e) { /* skip malformed */ }
+    const eventsBaseDir = path.dirname(cfg.eventLogPath);
+
+    // Backward compat: read old flat log
+    if (fs.existsSync(cfg.eventLogPath)) {
+      for (const e of readJsonl(await fsAsync.readFile(cfg.eventLogPath, 'utf8'))) {
+        const key = dedupeKey(e);
+        if (!seen.has(key)) { seen.add(key); events.push(e); }
       }
-      events.sort((a,b) => new Date(b.timestampUtc || b.timestamp) - new Date(a.timestampUtc || a.timestamp));
-      for (const event of events) {
-        event.thumbnailFile = event.thumbnailPath ? path.basename(event.thumbnailPath) : null;
+    }
+
+    // Read per-day logs: eventsBaseDir/YYYY/MM/DD/events.jsonl
+    try {
+      const years = (await fsAsync.readdir(eventsBaseDir, { withFileTypes: true }))
+        .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name));
+      for (const year of years) {
+        const months = (await fsAsync.readdir(path.join(eventsBaseDir, year.name), { withFileTypes: true }))
+          .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
+        for (const month of months) {
+          const days = (await fsAsync.readdir(path.join(eventsBaseDir, year.name, month.name), { withFileTypes: true }))
+            .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
+          for (const day of days) {
+            const dayLog = path.join(eventsBaseDir, year.name, month.name, day.name, 'events.jsonl');
+            if (fs.existsSync(dayLog)) {
+              for (const e of readJsonl(await fsAsync.readFile(dayLog, 'utf8'))) {
+                const key = dedupeKey(e);
+                if (!seen.has(key)) { seen.add(key); events.push(e); }
+              }
+            }
+          }
+        }
       }
+    } catch (err) {
+      // no per-day logs yet; ignore
+    }
+
+    events.sort((a, b) => new Date(b.timestampUtc || b.timestamp) - new Date(a.timestampUtc || a.timestamp));
+
+    for (const event of events) {
+      // thumbnailUrl: relative to eventsBaseDir, served by static middleware at /events
+      event.thumbnailUrl = null;
+      if (event.thumbnailPath) {
+        const rel = path.relative(eventsBaseDir, event.thumbnailPath);
+        if (!rel.startsWith('..')) {
+          event.thumbnailUrl = '/events/' + rel.split(path.sep).join('/');
+        }
+      }
+
+      // videoHref: original 5-min clip → daily output.mkv → null
+      const originalClip = event.originalClipPath || event.clipPath;
+      const dailyClip = event.dailyClipPath ||
+        (originalClip ? path.join(path.dirname(originalClip), 'output.mkv') : null);
+
+      let videoHref = null;
+      let usingDailyFallback = false;
+      let clipToUse = null;
+      if (originalClip && fs.existsSync(originalClip)) {
+        clipToUse = originalClip;
+      } else if (dailyClip && fs.existsSync(dailyClip)) {
+        clipToUse = dailyClip;
+        usingDailyFallback = true;
+      }
+      if (clipToUse) {
+        const rel = path.relative(storage.rootpath, clipToUse);
+        if (!rel.startsWith('..')) {
+          videoHref = '/' + rel.split(path.sep).join('/');
+        }
+      }
+
+      event.videoHref = videoHref;
+      event.usingDailyFallback = usingDailyFallback;
     }
   } catch (err) {
     console.log('Event log not available:', err.message);

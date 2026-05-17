@@ -196,13 +196,15 @@ async function runPythonDetector(frameDir, options = {}) {
     }
 }
 
-async function createThumbnail(clipPath, detection) {
+async function createThumbnail(clipPath, detection, thumbnailDir) {
     if (!detection.framePath) return null;
 
+    const dir = thumbnailDir || config.thumbnailDir;
+    await fsAsync.mkdir(dir, { recursive: true });
     const safeType = String(detection.type || 'event').replace(/[^a-z0-9_-]/gi, '').toLowerCase();
     const frameTimestamp = String(detection.frameTimestampSeconds || 0).replace(/[^0-9]/g, '_');
     const basename = `${clipHash(clipPath)}-${safeType}-${frameTimestamp}.jpg`;
-    const thumbnailPath = path.join(config.thumbnailDir, basename);
+    const thumbnailPath = path.join(dir, basename);
     await fsAsync.copyFile(detection.framePath, thumbnailPath);
     return thumbnailPath;
 }
@@ -276,8 +278,15 @@ async function detectEventsInClip(clipPath, options = {}) {
 
         const deduped = dedupeDetections(detectorResult.detections || []);
 
+        const clipFileDate = parseClipTimestamp(path.basename(clipPath));
+        const clipDateLocal = localDateString(clipFileDate || new Date());
+        const [tYear, tMonth, tDay] = clipDateLocal.split('-');
+        const dayThumbnailDir = path.join(
+            path.dirname(config.eventLogPath), tYear, tMonth, tDay, 'thumbnails'
+        );
+
         for (const detection of deduped) {
-            detection.thumbnailPath = await createThumbnail(clipPath, detection);
+            detection.thumbnailPath = await createThumbnail(clipPath, detection, dayThumbnailDir);
             detection.colour = detection.colour || 'unknown';
         }
 
@@ -308,11 +317,45 @@ function getDisplayType(type) {
     return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
-// Log event to JSONL file
+function makeEventId(camera, timestampUtc, type, clipPath) {
+    return crypto.createHash('sha1')
+        .update(`${camera}|${timestampUtc}|${type}|${clipPath}`)
+        .digest('hex')
+        .slice(0, 16);
+}
+
+function getDayEventLogPath(eventDateLocal) {
+    const [year, month, day] = eventDateLocal.split('-');
+    return path.join(path.dirname(config.eventLogPath), year, month, day, 'events.jsonl');
+}
+
+async function isDuplicateEvent(dayLogPath, eventId) {
+    try {
+        const data = await fsAsync.readFile(dayLogPath, 'utf8');
+        const lines = data.split('\n').filter(l => l.trim());
+        for (const line of lines) {
+            try { if (JSON.parse(line).eventId === eventId) return true; } catch (e) { /* skip */ }
+        }
+        return false;
+    } catch (err) {
+        return false;
+    }
+}
+
+// Log event to per-day JSONL file; skip duplicates
 async function logEvent(event) {
     try {
+        const dateKey = event.eventDateLocal || new Date().toISOString().slice(0, 10);
+        const dayLogPath = getDayEventLogPath(dateKey);
+        await fsAsync.mkdir(path.dirname(dayLogPath), { recursive: true });
+
+        if (event.eventId && await isDuplicateEvent(dayLogPath, event.eventId)) {
+            console.log('Event already logged; skipping:', event.eventId);
+            return;
+        }
+
         const eventLine = JSON.stringify(event) + '\n';
-        await fsAsync.appendFile(config.eventLogPath, eventLine);
+        await fsAsync.appendFile(dayLogPath, eventLine);
         console.log('✓ Event logged:', event.type, 'at', event.timestampUtc);
     } catch (err) {
         console.error('✗ Failed to log event:', err.message);
@@ -347,6 +390,13 @@ function formatLocalDisplay(date) {
     return formatter.format(date);
 }
 
+function localDateString(date) {
+    return new Intl.DateTimeFormat('en-CA', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        timeZone: 'Europe/London'
+    }).format(date);
+}
+
 function getEventTimestamps(filename, detection) {
     const clipStart = parseClipTimestamp(filename);
     const offsetSeconds = Number(detection.frameTimestampSeconds || 0);
@@ -356,7 +406,8 @@ function getEventTimestamps(filename, detection) {
 
     return {
         timestampUtc: eventDate.toISOString(),
-        timestampLocalDisplay: formatLocalDisplay(eventDate)
+        timestampLocalDisplay: formatLocalDisplay(eventDate),
+        eventDateLocal: localDateString(eventDate)
     };
 }
 
@@ -383,16 +434,22 @@ async function scanDirectory(dirPath) {
             // Log any detected events
             for (const detection of detections) {
                 const timestamps = getEventTimestamps(file, detection);
+                const eventId = makeEventId(config.camera, timestamps.timestampUtc, detection.type, clipPath);
                 const event = {
+                    eventId,
                     timestampUtc: timestamps.timestampUtc,
                     timestampLocalDisplay: timestamps.timestampLocalDisplay,
                     timestamp: timestamps.timestampUtc,
+                    eventDateLocal: timestamps.eventDateLocal,
                     camera: config.camera,
                     type: detection.type,
                     displayType: getDisplayType(detection.type),
                     confidence: detection.confidence,
                     colour: detection.colour || 'unknown',
+                    frameTimestampSeconds: Number(detection.frameTimestampSeconds || 0),
+                    originalClipPath: clipPath,
                     clipPath: clipPath,
+                    dailyClipPath: path.join(path.dirname(clipPath), 'output.mkv'),
                     thumbnailPath: detection.thumbnailPath || null
                 };
                 
@@ -491,16 +548,22 @@ async function scanSingleClip(clipPath, options = {}) {
 
     for (const detection of detections) {
         const timestamps = getEventTimestamps(file, detection);
+        const eventId = makeEventId(config.camera, timestamps.timestampUtc, detection.type, clipPath);
         const event = {
+            eventId,
             timestampUtc: timestamps.timestampUtc,
             timestampLocalDisplay: timestamps.timestampLocalDisplay,
             timestamp: timestamps.timestampUtc,
+            eventDateLocal: timestamps.eventDateLocal,
             camera: config.camera,
             type: detection.type,
             displayType: getDisplayType(detection.type),
             confidence: detection.confidence,
             colour: detection.colour || 'unknown',
+            frameTimestampSeconds: Number(detection.frameTimestampSeconds || 0),
+            originalClipPath: clipPath,
             clipPath: clipPath,
+            dailyClipPath: path.join(path.dirname(clipPath), 'output.mkv'),
             thumbnailPath: detection.thumbnailPath || null
         };
 

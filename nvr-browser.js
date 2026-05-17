@@ -100,6 +100,9 @@ app.get('/events', async (req, res) => {
         try { events.push(JSON.parse(line)); } catch (e) { /* skip malformed */ }
       }
       events.sort((a,b) => new Date(b.timestampUtc || b.timestamp) - new Date(a.timestampUtc || a.timestamp));
+      for (const event of events) {
+        event.thumbnailFile = event.thumbnailPath ? path.basename(event.thumbnailPath) : null;
+      }
     }
   } catch (err) {
     console.log('Event log not available:', err.message);

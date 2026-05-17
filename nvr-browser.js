@@ -93,15 +93,13 @@ app.get('/events', async (req, res) => {
   const events = [];
   try {
     const cfg = require('./event-detection.json');
-    if (cfg.enabled && fsAsync) {
-      if (fs.existsSync(cfg.eventLogPath)) {
-        const logData = await fsAsync.readFile(cfg.eventLogPath, 'utf8');
-        const lines = logData.split('\\n').filter(l => l.trim());
-        for (const line of lines) {
-          try { events.push(JSON.parse(line)); } catch (e) { /* skip malformed */ }
-        }
-        events.sort((a,b) => new Date(b.timestampUtc || b.timestamp) - new Date(a.timestampUtc || a.timestamp));
+    if (cfg.eventLogPath && fs.existsSync(cfg.eventLogPath)) {
+      const logData = await fsAsync.readFile(cfg.eventLogPath, 'utf8');
+      const lines = logData.split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        try { events.push(JSON.parse(line)); } catch (e) { /* skip malformed */ }
       }
+      events.sort((a,b) => new Date(b.timestampUtc || b.timestamp) - new Date(a.timestampUtc || a.timestamp));
     }
   } catch (err) {
     console.log('Event log not available:', err.message);

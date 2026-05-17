@@ -78,10 +78,11 @@ app.use(require('./video-file-server'));
 app.use(express.static('public'));
 
 // Serve event assets (flat + per-day thumbnails) from the events base directory
+// Use /events-static to avoid conflicting with the /events page route and *.:ext catch-all
 try {
   const eventCfg = require('./event-detection.json');
   if (eventCfg && eventCfg.eventLogPath) {
-    app.use('/events', express.static(path.dirname(eventCfg.eventLogPath)));
+    app.use('/events-static', express.static(path.dirname(eventCfg.eventLogPath)));
   }
 } catch (err) {
   // config missing -> leave routes untouched
@@ -89,32 +90,55 @@ try {
 
 // Event Log route
 app.get('/events', async (req, res) => {
-  const events = [];
-  const seen = new Set();
-
-  function dedupeKey(e) {
-    return e.eventId || `${e.timestampUtc || e.timestamp}|${e.type}|${e.clipPath || ''}|${e.thumbnailPath || ''}`;
-  }
-
   function readJsonl(data) {
     return data.split('\n').filter(l => l.trim())
       .map(l => { try { return JSON.parse(l); } catch (e) { return null; } })
       .filter(Boolean);
   }
 
+  // Canonical dedup key: camera + UTC timestamp + type.
+  // Deliberately does NOT use eventId so that a flat-log entry (no eventId) and a
+  // per-day entry (has eventId) for the same real event share the same key.
+  function canonicalKey(e) {
+    const ts = e.timestampUtc || e.timestamp || '';
+    return `${e.camera || ''}|${ts}|${e.type || ''}`;
+  }
+
+  // Higher score = richer / prefer to keep
+  function richness(e) {
+    let score = 0;
+    if (e.eventId) score += 4;
+    if (e.eventDateLocal) score += 2;
+    if (e.originalClipPath || e.dailyClipPath) score += 1;
+    return score;
+  }
+
+  // Extract a YYYY-MM-DD string for grouping
+  function getEventDate(e) {
+    if (e.eventDateLocal) return e.eventDateLocal;
+    if (e.timestampLocalDisplay) {
+      const m = e.timestampLocalDisplay.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    }
+    const ts = e.timestampUtc || e.timestamp;
+    return ts ? ts.slice(0, 10) : 'unknown';
+  }
+
+  const byKey = new Map(); // canonical key -> best event seen so far
+
+  function mergeEvent(e) {
+    const key = canonicalKey(e);
+    const existing = byKey.get(key);
+    if (!existing || richness(e) > richness(existing)) {
+      byKey.set(key, e);
+    }
+  }
+
   try {
     const cfg = require('./event-detection.json');
     const eventsBaseDir = path.dirname(cfg.eventLogPath);
 
-    // Backward compat: read old flat log
-    if (fs.existsSync(cfg.eventLogPath)) {
-      for (const e of readJsonl(await fsAsync.readFile(cfg.eventLogPath, 'utf8'))) {
-        const key = dedupeKey(e);
-        if (!seen.has(key)) { seen.add(key); events.push(e); }
-      }
-    }
-
-    // Read per-day logs: eventsBaseDir/YYYY/MM/DD/events.jsonl
+    // Per-day logs first — they are the richer, canonical source
     try {
       const years = (await fsAsync.readdir(eventsBaseDir, { withFileTypes: true }))
         .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name));
@@ -128,8 +152,7 @@ app.get('/events', async (req, res) => {
             const dayLog = path.join(eventsBaseDir, year.name, month.name, day.name, 'events.jsonl');
             if (fs.existsSync(dayLog)) {
               for (const e of readJsonl(await fsAsync.readFile(dayLog, 'utf8'))) {
-                const key = dedupeKey(e);
-                if (!seen.has(key)) { seen.add(key); events.push(e); }
+                mergeEvent(e);
               }
             }
           }
@@ -139,19 +162,27 @@ app.get('/events', async (req, res) => {
       // no per-day logs yet; ignore
     }
 
-    events.sort((a, b) => new Date(b.timestampUtc || b.timestamp) - new Date(a.timestampUtc || a.timestamp));
+    // Flat legacy log — only adds entries not already covered by per-day logs
+    if (fs.existsSync(cfg.eventLogPath)) {
+      for (const e of readJsonl(await fsAsync.readFile(cfg.eventLogPath, 'utf8'))) {
+        mergeEvent(e); // per-day events already have higher richness and will win ties
+      }
+    }
 
-    for (const event of events) {
-      // thumbnailUrl: relative to eventsBaseDir, served by static middleware at /events
+    // Sort all deduplicated events newest first
+    const allEvents = [...byKey.values()];
+    allEvents.sort((a, b) => new Date(b.timestampUtc || b.timestamp) - new Date(a.timestampUtc || a.timestamp));
+
+    // Decorate with thumbnailUrl and videoHref
+    for (const event of allEvents) {
       event.thumbnailUrl = null;
       if (event.thumbnailPath) {
         const rel = path.relative(eventsBaseDir, event.thumbnailPath);
         if (!rel.startsWith('..')) {
-          event.thumbnailUrl = '/events/' + rel.split(path.sep).join('/');
+          event.thumbnailUrl = '/events-static/' + rel.split(path.sep).join('/');
         }
       }
 
-      // videoHref: original 5-min clip → daily output.mkv → null
       const originalClip = event.originalClipPath || event.clipPath;
       const dailyClip = event.dailyClipPath ||
         (originalClip ? path.join(path.dirname(originalClip), 'output.mkv') : null);
@@ -168,17 +199,35 @@ app.get('/events', async (req, res) => {
       if (clipToUse) {
         const rel = path.relative(storage.rootpath, clipToUse);
         if (!rel.startsWith('..')) {
-          videoHref = '/' + rel.split(path.sep).join('/');
+          videoHref = '/' + rel.split('/').map(encodeURIComponent).join('/');
         }
       }
 
       event.videoHref = videoHref;
       event.usingDailyFallback = usingDailyFallback;
     }
+
+    // Group by local date, newest date first
+    const groupMap = new Map();
+    for (const e of allEvents) {
+      const d = getEventDate(e);
+      if (!groupMap.has(d)) groupMap.set(d, []);
+      groupMap.get(d).push(e);
+    }
+
+    const groupedEvents = [...groupMap.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([dateKey, evs]) => {
+        const parts = dateKey.split('-');
+        const label = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : dateKey;
+        return { label, events: evs };
+      });
+
+    res.render('event-log', { pageTitle: 'Event Log', groupedEvents });
   } catch (err) {
     console.log('Event log not available:', err.message);
+    res.render('event-log', { pageTitle: 'Event Log', groupedEvents: [] });
   }
-  res.render('event-log', { pageTitle: 'Event Log', events });
 });
 
 app.get('*.:ext', async (req, res, next) => {

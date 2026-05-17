@@ -93,7 +93,7 @@ app.get('/events', async (req, res) => {
   const events = [];
   try {
     const cfg = require('./event-detection.json');
-    if (cfg.enabled && fsAsync) {
+    if (fsAsync) {
       if (fs.existsSync(cfg.eventLogPath)) {
         const logData = await fsAsync.readFile(cfg.eventLogPath, 'utf8');
         const lines = logData.split('\\n').filter(l => l.trim());

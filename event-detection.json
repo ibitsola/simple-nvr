@@ -4,8 +4,8 @@
   "camera": "driveway",
   "classes": ["person", "cat", "dog"],
   "scanIntervalSeconds": 300,
-  "sampleEverySeconds": 5,
-  "maxFramesPerClip": 60,
+  "sampleEverySeconds": 3,
+  "maxFramesPerClip": 100,
   "tempFrameDir": "/tmp/simple-nvr-events",
   "pythonExecutable": "python3",
   "pythonDetectorPath": "scripts/detect-events.py",
@@ -15,8 +15,8 @@
   "minConfidence": 0.25,
   "classConfidence": {
     "person": 0.25,
-    "cat": 0.25,
-    "dog": 0.25
+    "cat": 0.15,
+    "dog": 0.15
   },
   "eventLogPath": "/mnt/cctv/events/events.jsonl",
   "thumbnailDir": "/mnt/cctv/events/thumbnails",
@@ -24,7 +24,7 @@
   "motionDetection": {
     "enabled": true,
     "pixelChangeThreshold": 5000,
-    "minChangedAreaPercent": 1.0
+    "minChangedAreaPercent": 0.05
   },
   "mockMode": false
 }

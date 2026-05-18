@@ -25,6 +25,8 @@ def parse_args():
     parser.add_argument("--include-all-classes", action="store_true")
     parser.add_argument("--model", default="yolov8n.pt")
     parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--motion-detection-enabled", action="store_true")
+    parser.add_argument("--motion-min-area-percent", type=float, default=1.0)
     return parser.parse_args()
 
 
@@ -43,11 +45,87 @@ def yolo_class_name(class_names, class_id):
     return class_id
 
 
+def detect_motion(frames, min_area_percent):
+    """
+    Compare adjacent sampled frames using frame differencing.
+    Returns (motion_detected, best_frame_path, analysis_dict).
+    With only one frame, motion is assumed so YOLO still runs.
+    """
+    if len(frames) < 2:
+        return True, frames[0] if frames else None, {
+            "note": "single frame, assumed motion",
+            "maxChangedPercent": 100.0,
+            "frameCount": len(frames),
+            "frames": [],
+        }
+
+    max_changed_pct = 0.0
+    best_frame = frames[0]
+    frame_analysis = []
+    prev_blurred = None
+
+    for frame_path in frames:
+        img = cv2.imread(str(frame_path))
+        if img is None:
+            continue
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (21, 21), 0)
+
+        if prev_blurred is not None:
+            diff = cv2.absdiff(prev_blurred, blurred)
+            _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+            changed_pixels = int(cv2.countNonZero(thresh))
+            total_pixels = blurred.shape[0] * blurred.shape[1]
+            changed_pct = (changed_pixels / total_pixels) * 100.0
+            frame_analysis.append({
+                "frame": frame_path.name,
+                "changedPercent": round(changed_pct, 3),
+                "changedPixels": changed_pixels,
+            })
+            if changed_pct > max_changed_pct:
+                max_changed_pct = changed_pct
+                best_frame = frame_path
+
+        prev_blurred = blurred
+
+    return (max_changed_pct >= min_area_percent), best_frame, {
+        "maxChangedPercent": round(max_changed_pct, 3),
+        "minAreaPercent": min_area_percent,
+        "frameCount": len(frames),
+        "frames": frame_analysis,
+    }
+
+
 def main():
     args = parse_args()
     wanted_classes = set(args.classes)
     frame_dir = Path(args.frame_dir)
     frames = sorted(frame_dir.glob("frame_*.jpg"))
+
+    result_extra = {}
+
+    # Motion pre-check: fast frame differencing before loading the YOLO model.
+    # If no meaningful motion exists in the sampled frames, skip YOLO entirely.
+    if args.motion_detection_enabled:
+        motion_detected, best_motion_frame, motion_analysis = detect_motion(
+            frames, args.motion_min_area_percent
+        )
+        result_extra["motionDetected"] = motion_detected
+        result_extra["motionAnalysis"] = motion_analysis
+        if best_motion_frame is not None:
+            idx = frame_index(best_motion_frame)
+            result_extra["bestMotionFramePath"] = str(best_motion_frame)
+            result_extra["bestMotionFrameTimestampSeconds"] = (idx - 1) * args.sample_every_seconds
+        else:
+            result_extra["bestMotionFramePath"] = None
+            result_extra["bestMotionFrameTimestampSeconds"] = 0
+
+        if not motion_detected:
+            output = {"detections": []}
+            output.update(result_extra)
+            sys.stdout.write(json.dumps(output, separators=(",", ":")))
+            sys.stdout.write("\n")
+            return
 
     # Ultralytics may print first-run setup/settings messages during import and
     # model load. Keep all third-party chatter away from stdout; Node parses
@@ -93,7 +171,9 @@ def main():
                     "frameTimestampSeconds": frame_timestamp_seconds,
                 })
 
-    sys.stdout.write(json.dumps({"detections": detections}, separators=(",", ":")))
+    output = {"detections": detections}
+    output.update(result_extra)
+    sys.stdout.write(json.dumps(output, separators=(",", ":")))
     sys.stdout.write("\n")
 
 

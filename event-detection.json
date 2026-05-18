@@ -14,12 +14,17 @@
   "pythonTimeoutMs": 180000,
   "minConfidence": 0.25,
   "classConfidence": {
-    "person": 0.6,
+    "person": 0.25,
     "cat": 0.25,
     "dog": 0.25
   },
   "eventLogPath": "/mnt/cctv/events/events.jsonl",
   "thumbnailDir": "/mnt/cctv/events/thumbnails",
   "retentionDays": 30,
+  "motionDetection": {
+    "enabled": true,
+    "pixelChangeThreshold": 5000,
+    "minChangedAreaPercent": 1.0
+  },
   "mockMode": false
 }

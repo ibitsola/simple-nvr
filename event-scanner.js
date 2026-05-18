@@ -32,6 +32,12 @@ async function loadConfig(options = {}) {
         config.classConfidence = config.classConfidence || {};
         config.yoloImageSize = Number(config.yoloImageSize || 640);
         config.pythonTimeoutMs = Number(config.pythonTimeoutMs || DETECTOR_TIMEOUT_MS);
+        const motionCfg = config.motionDetection || {};
+        config.motionDetection = {
+            enabled: Boolean(motionCfg.enabled),
+            minChangedAreaPercent: Number(motionCfg.minChangedAreaPercent || 1.0),
+            pixelChangeThreshold: Number(motionCfg.pixelChangeThreshold || 5000),
+        };
 
         if (!path.isAbsolute(config.pythonDetectorPath)) {
             config.pythonDetectorPath = path.join(__dirname, config.pythonDetectorPath);
@@ -192,6 +198,10 @@ async function runPythonDetector(frameDir, options = {}) {
     if (options.includeAllClasses) {
         args.push('--include-all-classes');
     }
+    if (config.motionDetection && config.motionDetection.enabled) {
+        args.push('--motion-detection-enabled');
+        args.push('--motion-min-area-percent', String(config.motionDetection.minChangedAreaPercent));
+    }
 
     const { stdout } = await runCommand(config.pythonExecutable, args, { timeoutMs: config.pythonTimeoutMs });
     try {
@@ -295,6 +305,18 @@ async function detectEventsInClip(clipPath, options = {}) {
         const detectorResult = await runPythonDetector(frameDir, { includeAllClasses: debug });
         if (debug) {
             await writeJsonFile(path.join(debugDir, 'raw-detections.json'), detectorResult);
+            if (detectorResult.motionAnalysis) {
+                await writeJsonFile(path.join(debugDir, 'motion-analysis.json'), detectorResult.motionAnalysis);
+            }
+        }
+
+        // If motion detection ran and found no activity, skip YOLO results entirely
+        const motionEnabled = config.motionDetection && config.motionDetection.enabled;
+        if (motionEnabled && detectorResult.motionDetected === false) {
+            if (debug) {
+                await writeJsonFile(path.join(debugDir, 'deduped-detections.json'), []);
+            }
+            return { detections: [], motionSkipped: true, failed: false, debugDir };
         }
 
         const deduped = dedupeDetections(detectorResult.detections || []);
@@ -309,6 +331,19 @@ async function detectEventsInClip(clipPath, options = {}) {
         for (const detection of deduped) {
             detection.thumbnailPath = await createThumbnail(clipPath, detection, dayThumbnailDir);
             detection.colour = detection.colour || 'unknown';
+        }
+
+        // Motion fallback: YOLO ran but found nothing classifiable; log a generic motion event
+        if (deduped.length === 0 && motionEnabled && detectorResult.motionDetected === true) {
+            const motionFallback = {
+                type: 'motion',
+                confidence: 1.0,
+                colour: 'unknown',
+                framePath: detectorResult.bestMotionFramePath || null,
+                frameTimestampSeconds: Number(detectorResult.bestMotionFrameTimestampSeconds || 0),
+            };
+            motionFallback.thumbnailPath = await createThumbnail(clipPath, motionFallback, dayThumbnailDir);
+            deduped.push(motionFallback);
         }
 
         if (debug) {

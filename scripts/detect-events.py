@@ -27,6 +27,8 @@ def parse_args():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--motion-detection-enabled", action="store_true")
     parser.add_argument("--motion-min-area-percent", type=float, default=1.0)
+    parser.add_argument("--motion-min-blob-pixels", type=int, default=50)
+    parser.add_argument("--motion-max-blob-percent", type=float, default=5.0)
     return parser.parse_args()
 
 
@@ -45,9 +47,14 @@ def yolo_class_name(class_names, class_id):
     return class_id
 
 
-def detect_motion(frames, min_area_percent):
+def detect_motion(frames, min_area_percent, min_blob_pixels=50, max_blob_percent=5.0):
     """
-    Compare adjacent sampled frames using frame differencing.
+    Compare adjacent sampled frames using frame differencing with contour analysis.
+    Ignores tiny noise blobs (< min_blob_pixels) and huge scene-wide changes
+    (> max_blob_percent of frame area) caused by lighting/exposure shifts.
+    Prefers the frame whose largest plausible local blob is biggest.
+    Falls back to the frame with the largest global change when no plausible
+    blobs are found (e.g. a genuinely large moving object).
     Returns (motion_detected, best_frame_path, analysis_dict).
     With only one frame, motion is assumed so YOLO still runs.
     """
@@ -60,7 +67,9 @@ def detect_motion(frames, min_area_percent):
         }
 
     max_changed_pct = 0.0
-    best_frame = frames[0]
+    best_frame_global = frames[0]  # fallback: largest overall changed area
+    best_blob_score = 0
+    best_frame_blob = None         # preferred: largest plausible local blob
     frame_analysis = []
     prev_blurred = None
 
@@ -74,23 +83,54 @@ def detect_motion(frames, min_area_percent):
         if prev_blurred is not None:
             diff = cv2.absdiff(prev_blurred, blurred)
             _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
-            changed_pixels = int(cv2.countNonZero(thresh))
             total_pixels = blurred.shape[0] * blurred.shape[1]
+            changed_pixels = int(cv2.countNonZero(thresh))
             changed_pct = (changed_pixels / total_pixels) * 100.0
+
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            max_blob_pixels = (max_blob_percent / 100.0) * total_pixels
+            plausible_blobs = [
+                int(cv2.contourArea(c)) for c in contours
+                if min_blob_pixels <= cv2.contourArea(c) <= max_blob_pixels
+            ]
+            best_local_blob = max(plausible_blobs) if plausible_blobs else 0
+
             frame_analysis.append({
                 "frame": frame_path.name,
                 "changedPercent": round(changed_pct, 3),
                 "changedPixels": changed_pixels,
+                "blobCount": len(contours),
+                "plausibleBlobCount": len(plausible_blobs),
+                "bestBlobArea": best_local_blob,
+                "isGlobalChange": changed_pct > max_blob_percent,
             })
+
             if changed_pct > max_changed_pct:
                 max_changed_pct = changed_pct
-                best_frame = frame_path
+                best_frame_global = frame_path
+
+            if best_local_blob > best_blob_score:
+                best_blob_score = best_local_blob
+                best_frame_blob = frame_path
 
         prev_blurred = blurred
 
-    return (max_changed_pct >= min_area_percent), best_frame, {
+    # Prefer the frame with the best plausible local blob;
+    # fall back to the largest global change frame if none found.
+    if best_frame_blob is not None:
+        best_frame = best_frame_blob
+        selection_reason = "best plausible local blob"
+    else:
+        best_frame = best_frame_global
+        selection_reason = "largest global change (no plausible local blobs found)"
+
+    motion_detected = max_changed_pct >= min_area_percent
+    return motion_detected, best_frame, {
         "maxChangedPercent": round(max_changed_pct, 3),
         "minAreaPercent": min_area_percent,
+        "bestFrameChosen": best_frame.name if best_frame else None,
+        "bestFrameSelectionReason": selection_reason,
+        "bestBlobScore": best_blob_score,
         "frameCount": len(frames),
         "frames": frame_analysis,
     }
@@ -108,7 +148,9 @@ def main():
     # If no meaningful motion exists in the sampled frames, skip YOLO entirely.
     if args.motion_detection_enabled:
         motion_detected, best_motion_frame, motion_analysis = detect_motion(
-            frames, args.motion_min_area_percent
+            frames, args.motion_min_area_percent,
+            min_blob_pixels=args.motion_min_blob_pixels,
+            max_blob_percent=args.motion_max_blob_percent,
         )
         result_extra["motionDetected"] = motion_detected
         result_extra["motionAnalysis"] = motion_analysis

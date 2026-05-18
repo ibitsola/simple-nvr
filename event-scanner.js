@@ -35,8 +35,9 @@ async function loadConfig(options = {}) {
         const motionCfg = config.motionDetection || {};
         config.motionDetection = {
             enabled: Boolean(motionCfg.enabled),
-            minChangedAreaPercent: Number(motionCfg.minChangedAreaPercent || 1.0),
-            pixelChangeThreshold: Number(motionCfg.pixelChangeThreshold || 5000),
+            minChangedAreaPercent: Number(motionCfg.minChangedAreaPercent || 0.05),
+            minMotionBlobPixels: Number(motionCfg.minMotionBlobPixels || 50),
+            maxMotionBlobPercent: Number(motionCfg.maxMotionBlobPercent || 5.0),
         };
 
         if (!path.isAbsolute(config.pythonDetectorPath)) {
@@ -201,6 +202,8 @@ async function runPythonDetector(frameDir, options = {}) {
     if (config.motionDetection && config.motionDetection.enabled) {
         args.push('--motion-detection-enabled');
         args.push('--motion-min-area-percent', String(config.motionDetection.minChangedAreaPercent));
+        args.push('--motion-min-blob-pixels', String(config.motionDetection.minMotionBlobPixels));
+        args.push('--motion-max-blob-percent', String(config.motionDetection.maxMotionBlobPercent));
     }
 
     const { stdout } = await runCommand(config.pythonExecutable, args, { timeoutMs: config.pythonTimeoutMs });

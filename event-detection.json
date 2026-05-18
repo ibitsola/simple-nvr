@@ -23,9 +23,8 @@
   "retentionDays": 30,
   "motionDetection": {
     "enabled": true,
-    "minChangedAreaPercent": 0.05,
-    "minMotionBlobPixels": 50,
-    "maxMotionBlobPercent": 5
+    "pixelChangeThreshold": 5000,
+    "minChangedAreaPercent": 0.05
   },
   "mockMode": false
 }

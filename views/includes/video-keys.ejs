@@ -7,13 +7,13 @@
         const key = e.code;
 
         if (key === 'ArrowLeft') {
-            vid.currentTime -= 5;
+            vid.currentTime -= 10;
             if (vid.currentTime < 0) {
                 vid.pause();
                 vid.currentTime = 0;
             }
         } else if (key === 'ArrowRight') {
-            vid.currentTime += 5;
+            vid.currentTime += 10;
             if (vid.currentTime > vid.duration) {
                 vid.pause();
                 vid.currentTime = 0;

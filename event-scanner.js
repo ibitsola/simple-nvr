@@ -35,6 +35,7 @@ async function loadConfig(options = {}) {
         const motionCfg = config.motionDetection || {};
         config.motionDetection = {
             enabled: Boolean(motionCfg.enabled),
+            logMotionEvents: Boolean(motionCfg.logMotionEvents),
             minChangedAreaPercent: Number(motionCfg.minChangedAreaPercent || 0.05),
             minMotionBlobPixels: Number(motionCfg.minMotionBlobPixels || 50),
             maxMotionBlobPercent: Number(motionCfg.maxMotionBlobPercent || 5.0),
@@ -336,8 +337,11 @@ async function detectEventsInClip(clipPath, options = {}) {
             detection.colour = detection.colour || 'unknown';
         }
 
-        // Motion fallback: YOLO ran but found nothing classifiable; log a generic motion event
-        if (deduped.length === 0 && motionEnabled && detectorResult.motionDetected === true) {
+        // Motion fallback: YOLO ran but found nothing classifiable; log a generic motion event.
+        // Only runs when motionDetection.logMotionEvents is explicitly enabled in config.
+        // Disabled by default — generic motion events tend to be noisy (flies, headlights, etc.).
+        const logMotionEvents = config.motionDetection && config.motionDetection.logMotionEvents;
+        if (deduped.length === 0 && motionEnabled && logMotionEvents && detectorResult.motionDetected === true) {
             const motionFallback = {
                 type: 'motion',
                 confidence: 1.0,

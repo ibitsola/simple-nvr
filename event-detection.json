@@ -14,7 +14,7 @@
   "pythonTimeoutMs": 180000,
   "minConfidence": 0.25,
   "classConfidence": {
-    "person": 0.25,
+    "person": 0.45,
     "cat": 0.15,
     "dog": 0.15
   },
@@ -22,8 +22,8 @@
   "thumbnailDir": "/mnt/cctv/events/thumbnails",
   "retentionDays": 30,
   "motionDetection": {
-    "enabled": true,
-    "pixelChangeThreshold": 5000,
+    "enabled": false,
+    "logMotionEvents": false,
     "minChangedAreaPercent": 0.05,
     "minMotionBlobPixels": 50,
     "maxMotionBlobPercent": 5

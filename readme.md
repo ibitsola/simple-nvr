@@ -31,11 +31,15 @@ If you just want to record video without the browser, you can choose to only run
 ---
 
 ## Offline event detection
-The optional event scanner samples recorded MKV clips with `ffmpeg`, calls a Python YOLOv8 detector, and appends detections to the Event Log page. It currently detects `person` and `cat`.
 
-This requires Raspberry Pi OS 64-bit. Ultralytics on Pi depends on a compatible Python environment, so use a fresh Python 3 virtualenv and keep the detector dependencies isolated from the recorder/browser Node app.
+The optional event scanner samples recorded MKV clips with `ffmpeg`, calls a Python YOLOv8 detector, and logs person and animal (cat/dog) detections to the **Event Log** page in the browser.
 
-Install the Raspberry Pi 5 dependencies with:
+Scanning is **offline only** — it processes saved recordings. There is no live inference.
+
+### Python environment setup
+
+This requires Raspberry Pi OS 64-bit. Use a dedicated Python virtualenv to keep Ultralytics isolated from the system Python:
+
 ```bash
 sudo apt update
 sudo apt install -y python3 python3-venv python3-pip python3-opencv ffmpeg
@@ -44,19 +48,162 @@ python3 -m venv ~/simple-nvr-yolo
 ~/simple-nvr-yolo/bin/pip install ultralytics opencv-python-headless
 ```
 
-Then either run the scanner with the virtualenv active:
-```bash
-source ~/simple-nvr-yolo/bin/activate
-node event-scanner.js
+> **Important:** Using system `python3` will fail with `No module named ultralytics`. Always use the virtualenv Python, either by activating it or by setting `pythonExecutable` in `event-detection.json` to the full venv path.
+
+### Configuration
+
+All event detection settings live in `event-detection.json`. Recommended configuration:
+
+```json
+{
+  "enabled": false,
+  "rootpath": "/mnt/cctv",
+  "camera": "driveway",
+  "classes": ["person", "cat", "dog"],
+  "scanIntervalSeconds": 300,
+  "sampleEverySeconds": 3,
+  "maxFramesPerClip": 100,
+  "tempFrameDir": "/tmp/simple-nvr-events",
+  "pythonExecutable": "/home/pi/simple-nvr-yolo/bin/python3",
+  "pythonDetectorPath": "scripts/detect-events.py",
+  "yoloModel": "yolov8s.pt",
+  "yoloImageSize": 960,
+  "pythonTimeoutMs": 180000,
+  "minConfidence": 0.25,
+  "classConfidence": {
+    "person": 0.45,
+    "cat": 0.15,
+    "dog": 0.15
+  },
+  "eventLogPath": "/mnt/cctv/events/events.jsonl",
+  "thumbnailDir": "/mnt/cctv/events/thumbnails",
+  "retentionDays": 30,
+  "motionDetection": {
+    "enabled": false,
+    "logMotionEvents": false,
+    "minChangedAreaPercent": 0.05,
+    "minMotionBlobPixels": 50,
+    "maxMotionBlobPercent": 5
+  },
+  "mockMode": false
+}
 ```
 
-Or run exactly one known clip manually:
+**Key config fields:**
+
+| Field | Description |
+|---|---|
+| `enabled` | Set `true` to run the automatic scanner daemon |
+| `pythonExecutable` | **Full path to virtualenv Python** — e.g. `/home/pi/simple-nvr-yolo/bin/python3`. Required for the automatic service; system `python3` lacks Ultralytics |
+| `camera` | Camera subdirectory name under `rootpath` |
+| `classConfidence` | Per-class confidence thresholds. Lower catches more detections but increases false positives |
+| `minConfidence` | Fallback threshold for any class not listed in `classConfidence` |
+| `sampleEverySeconds` | Interval between sampled frames. Lower = more frames per clip, slower scan |
+| `maxFramesPerClip` | Hard cap on frames sampled per clip |
+| `scanIntervalSeconds` | How often the automatic scanner re-checks for new clips (seconds) |
+| `yoloImageSize` | YOLO inference image size. `960` catches smaller/distant objects; `640` is faster |
+| `pythonTimeoutMs` | Per-clip timeout for the Python detector (milliseconds) |
+| `retentionDays` | Event logs and thumbnails older than this many days are deleted automatically |
+| `motionDetection.enabled` | Pre-filter clips by motion before running YOLO. Saves CPU on static clips |
+| `motionDetection.logMotionEvents` | If `true`, logs a generic `motion` event when YOLO finds nothing classifiable. **Disabled by default** — see note below |
+
+### Confidence thresholds
+
+Based on real-world testing against a Tapo driveway camera at night and daytime:
+
+- **`person`: 0.45** — Detections below ~45% at night are frequently false positives (flies, headlights, shadows). True persons typically score 50–93%.
+- **`cat` / `dog`: 0.15** — Distant cats are often detected as `dog` at low confidence. This is expected and correct; keep this threshold low to catch small/distant animals.
+
+> **Cat/dog label note:** YOLO frequently classifies cats as `dog`. This is acceptable — the Event Log UI displays both as **Animal**, with the raw YOLO type shown as secondary information.
+
+### Motion detection and `logMotionEvents`
+
+When `motionDetection.enabled` is `true`, the Python script analyses frames for motion before loading YOLO. Clips with no motion are skipped entirely (saves significant CPU). If motion is detected, YOLO runs normally.
+
+`logMotionEvents` controls whether a generic `motion` event is logged when YOLO finds motion but no classifiable person/animal:
+
+- **`false` (default):** Only person/cat/dog YOLO detections are logged. Motion events are never created. Recommended for normal use.
+- **`true`:** Also logs a `motion` event (with thumbnail of the best motion frame) when YOLO finds nothing classifiable. Useful for debugging missed detections, but produces many noisy events at night (flies, headlights, lighting changes).
+
+### Storage layout
+
+```
+/mnt/cctv/events/
+  events.jsonl                    # legacy flat log (may be empty)
+  YYYY/MM/DD/
+    events.jsonl                  # per-day event log (canonical source)
+    thumbnails/                   # compressed thumbnails (~300 px wide)
+  debug/
+    <clip-hash>/                  # debug output (manual --debug runs only)
+      frame_00001.jpg             # sampled frames
+      raw-detections.json         # all YOLO detections before filtering
+      deduped-detections.json     # final events after confidence/dedup
+      motion-analysis.json        # motion pre-filter stats (if enabled)
+```
+
+### Retention
+
+Event logs and thumbnails follow the same `retentionDays` retention as video recordings. After each scan, the scanner deletes `/mnt/cctv/events/YYYY/MM/DD` folders (including their thumbnails) older than the retention cutoff.
+
+**Debug folders** (`/mnt/cctv/events/debug/`) are **not** created by the automatic scanner and are **not** subject to automatic retention cleanup. They are only created by manual `--debug` runs and must be cleaned up manually if needed.
+
+### Running the scanner automatically
+
+Set `"enabled": true` and set `pythonExecutable` to the full virtualenv Python path, then run:
+
 ```bash
-source ~/simple-nvr-yolo/bin/activate
+pm2 start event-scanner.js --name event-scanner
+```
+
+The service does not use `--debug` and never creates debug folders.
+
+### Manual scan commands
+
+Scan a single clip:
+
+```bash
 node event-scanner.js --clip "/mnt/cctv/driveway/2026/05/15/2026-05-15T12 00 00.mkv"
 ```
 
-Conservative defaults live in `event-detection.json`: `scanIntervalSeconds` is `300`, `sampleEverySeconds` is `30`, `maxFramesPerClip` is `8`, and sampled frames are written under `/tmp/simple-nvr-events`.
+Scan all clips for a specific day:
+
+```bash
+node event-scanner.js --date 2026-05-18
+```
+
+Add `--debug` to either command to save sampled frames and raw detection JSON for inspection:
+
+```bash
+node event-scanner.js --clip "/mnt/cctv/driveway/2026/05/15/2026-05-15T12 00 00.mkv" --debug
+node event-scanner.js --date 2026-05-18 --debug
+```
+
+> For manual scans, either set `pythonExecutable` to the venv path in `event-detection.json`, or activate the virtualenv before running (`source ~/simple-nvr-yolo/bin/activate`).
+
+### Debug mode
+
+When `--debug` is passed, the scanner:
+
+- Saves sampled frames as JPEGs under `/mnt/cctv/events/debug/<clip-hash>/`
+- Writes `raw-detections.json` (all detections before confidence filtering and deduplication)
+- Writes `deduped-detections.json` (events that would actually be logged)
+- Writes `motion-analysis.json` (motion pre-filter per-frame stats, if motion detection is enabled)
+- Keeps the frame directory after scanning (normally cleaned up)
+
+Debug mode is **only** active when `--debug` is explicitly passed on the command line. The automatic daemon never runs in debug mode.
+
+---
+
+## Video player controls
+
+The browser video player supports 10-second skip controls for easier navigation of long recordings:
+
+- **← Left arrow**: skip back 10 seconds
+- **→ Right arrow**: skip forward 10 seconds
+- **Space**: play / pause
+- On-screen **◀◀ 10s** and **10s ▶▶** buttons are shown below the video
+
+These controls apply to all video playback — both individual 5-minute clips and the full-day `output.mkv` recording.
 
 ---
 
@@ -65,6 +212,32 @@ Conservative defaults live in `event-detection.json`: `scanIntervalSeconds` is `
 
 ### MP4 vs MKV
 `mkv` files seem to be more resistent to corruption. When unplugging the camera while an `mp4` file is being written to, the file is un-openable. When recording to an `mkv` file and the camera is unplugged, the files can be played and data is available until nearly the point of unplugging. `mkv` files can be played in the browser in the latest version of Chrome (as of October 2021). 
+
+### Audio in MP4 / iPhone playback
+
+Recordings are saved as `.mkv`. When the browser requests a 5-minute clip as `.mp4` (for iPhone/Safari), the server generates a temporary MP4 on demand.
+
+- The video codec is **stream-copied** from the MKV (`-c:v copy`) — no re-encoding, fast.
+- Audio is **transcoded to AAC** (`-c:a aac 128k`) to ensure compatibility with iPhone/Safari. Some IP camera audio codecs (e.g. G.711/PCM) are not supported in MP4 by Safari; re-encoding to AAC fixes this.
+- `-movflags +faststart` is applied so the MP4 is optimised for progressive streaming on mobile.
+
+The recording pipeline also captures audio from the camera stream with `-c:a copy`. If the camera produces no audio, the MKV and MP4 will be silent.
+
+**Diagnostic — check whether a recording has an audio stream:**
+
+```bash
+ffprobe -i "/mnt/cctv/driveway/2026/05/18/2026-05-18T12 00 00.mkv" 2>&1 | grep -E "Audio|Video"
+```
+
+Or for full stream details:
+
+```bash
+ffprobe -v quiet -print_format json -show_streams "/mnt/cctv/driveway/YYYY/MM/DD/clip.mkv" | python3 -m json.tool
+```
+
+If no `Audio` line appears, the camera stream contains no audio.
+
+
 
 ### Connecting to camera streams
 Using a wireless connection for the cameras appears to work well, and the video feeds very rarely drop connections (usually <60 seconds a day). However using a wireless connection for the Raspberry Pi 3b+ causes many video connection drops, often several minutes a day. For this reason **it is recommended to use a wired network connection for the Raspberry Pi / base station**.

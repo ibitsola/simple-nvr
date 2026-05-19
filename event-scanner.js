@@ -531,7 +531,7 @@ async function scanDirectory(dirPath, options = {}) {
                 console.log(`  ℹ Scanning output.mkv in ${dirPath} (no individual clips found — using concatenated day file)`);
             }
 
-            if (scannerState.processedClips[clipPath]) {
+            if (!options.ignoreState && scannerState.processedClips[clipPath]) {
                 stats.skipped++;
                 continue;
             }
@@ -833,7 +833,7 @@ async function main() {
             throw new Error(`Day directory not found: ${dayPath}`);
         }
         console.log(`Manual day scan: ${dateStr} — ${dayPath}`);
-        const result = await scanDirectory(dayPath, { debug });
+        const result = await scanDirectory(dayPath, { debug, ignoreState: true });
         console.log(`Scan complete: found ${result.found}, skipped ${result.skipped}, scanned ${result.scanned}, events logged ${result.eventsLogged}, duplicates skipped ${result.duplicatesSkipped}`);
         await saveState();
         return;

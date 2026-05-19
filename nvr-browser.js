@@ -308,7 +308,9 @@ app.get('*', async (req, res, next) => {
         })
         .sort((a, b) => {
             if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-            if (a.isDirectory) return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+            // Sort directories newest-first (reverse alpha/numeric) so days, months, years show
+            // most-recent at the top. Videos already sort newest-first via the same reverse compare.
+            if (a.isDirectory) return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' });
             return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' });
         });
     

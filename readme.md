@@ -215,13 +215,16 @@ These controls apply to all video playback — both individual 5-minute clips an
 
 ### Audio in MP4 / iPhone playback
 
-Recordings are saved as `.mkv`. When the browser requests a 5-minute clip as `.mp4` (for iPhone/Safari), the server generates a temporary MP4 on demand.
+Recordings are saved as `.mkv`. When the browser requests a 5-minute clip as `.mp4` (for iPhone/Safari), the server generates a temporary MP4 on demand and caches it in `/tmp/simple-nvr-mp4/` for subsequent requests. Cache files are purged after 5 minutes of inactivity.
 
 - The video codec is **stream-copied** from the MKV (`-c:v copy`) — no re-encoding, fast.
-- Audio is **transcoded to AAC** (`-c:a aac 128k`) to ensure compatibility with iPhone/Safari. Some IP camera audio codecs (e.g. G.711/PCM) are not supported in MP4 by Safari; re-encoding to AAC fixes this.
-- `-movflags +faststart` is applied so the MP4 is optimised for progressive streaming on mobile.
+- Audio is **transcoded to AAC** (`-c:a aac -b:a 128k`) to ensure compatibility with iPhone/Safari. Some IP camera audio codecs (e.g. G.711/PCM) are not supported in MP4 by Safari; re-encoding to AAC fixes this.
+- **`-movflags +faststart` is intentionally not used.** That flag requires ffmpeg to write the entire file and then read-and-rewrite it a second time to move the moov atom to the front — on a Raspberry Pi this doubles the I/O of a potentially 200 MB+ file and can cause memory pressure or audio corruption when combined with AAC encoding. The server already serves proper HTTP byte-range responses, so Safari can locate the moov atom at the end of the file without faststart.
+- **On first access**, the MP4 is generated while the browser waits (typically a few seconds for video-copy + AAC encode on a Pi). Subsequent accesses are served immediately from the cache.
 
-The recording pipeline also captures audio from the camera stream with `-c:a copy`. If the camera produces no audio, the MKV and MP4 will be silent.
+> **If audio is silent on both PC and iPhone:** clear the MP4 cache (`rm /tmp/simple-nvr-mp4/*.mp4`) and reload the page to force regeneration with the latest ffmpeg settings.
+
+The recording pipeline captures audio from the camera stream with `-c:a copy`. If the camera produces no audio in its RTSP stream, the MKV and generated MP4 will be silent regardless of the conversion settings.
 
 **Diagnostic — check whether a recording has an audio stream:**
 
@@ -235,7 +238,7 @@ Or for full stream details:
 ffprobe -v quiet -print_format json -show_streams "/mnt/cctv/driveway/YYYY/MM/DD/clip.mkv" | python3 -m json.tool
 ```
 
-If no `Audio` line appears, the camera stream contains no audio.
+If no `Audio` line appears, the camera stream contains no audio and the recordings will always be silent.
 
 
 

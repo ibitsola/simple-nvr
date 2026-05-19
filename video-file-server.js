@@ -25,7 +25,12 @@ function createTempMp4(mkvPath, tempMp4) {
 
     const promise = new Promise((resolve, reject) => {
         console.log(`Starting MP4 generation for: ${tempMp4}`);
-        const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-f', 'mp4', '-y', tempMp4Tmp]);
+        // Video is stream-copied (fast). Audio is re-encoded to AAC for iPhone/Safari compatibility.
+        // -movflags +faststart is intentionally omitted: it requires a second full read-and-rewrite
+        // of the temp file (potentially 100-300 MB on Pi), causing significant delay and potential
+        // memory pressure. The server already supports byte-range requests so Safari can locate
+        // the moov atom at the end of the file without faststart.
+        const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-f', 'mp4', '-y', tempMp4Tmp]);
 
         ffmpeg.on('error', (err) => {
             console.error(`FFmpeg spawn error for ${tempMp4Tmp}:`, err);

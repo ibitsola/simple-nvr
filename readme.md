@@ -101,6 +101,7 @@ All event detection settings live in `event-detection.json`. Recommended configu
 | `sampleEverySeconds` | Interval between sampled frames. Lower = more frames per clip, slower scan |
 | `maxFramesPerClip` | Hard cap on frames sampled per clip |
 | `scanIntervalSeconds` | How often the automatic scanner re-checks for new clips (seconds) |
+| `scanLookbackDays` | How many days back the automatic scanner looks. `1` = today + yesterday (default). `0` = today only. Manual `--date` and `--clip` scans ignore this limit and work on any date |
 | `yoloImageSize` | YOLO inference image size. `960` catches smaller/distant objects; `640` is faster |
 | `pythonTimeoutMs` | Per-clip timeout for the Python detector (milliseconds) |
 | `retentionDays` | Event logs and thumbnails older than this many days are deleted automatically |

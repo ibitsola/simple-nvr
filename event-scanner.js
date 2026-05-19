@@ -48,6 +48,9 @@ async function loadConfig(options = {}) {
         config.classConfidence = config.classConfidence || {};
         config.yoloImageSize = Number(config.yoloImageSize || 640);
         config.pythonTimeoutMs = Number(config.pythonTimeoutMs || DETECTOR_TIMEOUT_MS);
+        // scanLookbackDays: how many days back the automatic scan covers (0 = today only,
+        // 1 = today + yesterday, etc.).  Use != null so that 0 is a valid value.
+        config.scanLookbackDays = config.scanLookbackDays != null ? Number(config.scanLookbackDays) : 1;
         const motionCfg = config.motionDetection || {};
         config.motionDetection = {
             enabled: Boolean(motionCfg.enabled),
@@ -649,18 +652,34 @@ async function cleanupOldEvents() {
 async function performScan() {
     const cameraDir = path.join(config.rootpath, config.camera);
     const totals = { found: 0, skipped: 0, scanned: 0, eventsLogged: 0, duplicatesSkipped: 0 };
-    console.log(`\n--- Scan started: ${new Date().toISOString()} ---`);
+
+    // Compute lookback window in Europe/London local date strings (YYYY-MM-DD).
+    // scanLookbackDays: 1 → today + yesterday; 0 → today only.
+    const lookbackCutoff = new Date();
+    lookbackCutoff.setDate(lookbackCutoff.getDate() - config.scanLookbackDays);
+    const cutoffStr = localDateString(lookbackCutoff);
+    const todayStr = localDateString(new Date());
+    console.log(`\n--- Scan started: ${new Date().toISOString()} (scanning ${cutoffStr} → ${todayStr}, lookbackDays=${config.scanLookbackDays}) ---`);
 
     try {
         const years = (await fsAsync.readdir(cameraDir, { withFileTypes: true }))
             .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name));
         for (const year of years) {
+            // Skip entire year if it is before the cutoff year
+            if (year.name < cutoffStr.slice(0, 4)) continue;
             const months = (await fsAsync.readdir(path.join(cameraDir, year.name), { withFileTypes: true }))
                 .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
             for (const month of months) {
+                // Skip entire month if YYYY-MM is before cutoff
+                if (`${year.name}-${month.name}` < cutoffStr.slice(0, 7)) continue;
                 const days = (await fsAsync.readdir(path.join(cameraDir, year.name, month.name), { withFileTypes: true }))
                     .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
                 for (const day of days) {
+                    const dateKey = `${year.name}-${month.name}-${day.name}`;
+                    if (dateKey < cutoffStr) {
+                        // Outside lookback window — silently skip
+                        continue;
+                    }
                     const dayPath = path.join(cameraDir, year.name, month.name, day.name);
                     const result = await scanDirectory(dayPath);
                     totals.found += result.found;

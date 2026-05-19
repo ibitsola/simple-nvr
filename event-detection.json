@@ -4,6 +4,7 @@
   "camera": "driveway",
   "classes": ["person", "cat", "dog"],
   "scanIntervalSeconds": 300,
+  "scanLookbackDays": 1,
   "sampleEverySeconds": 3,
   "maxFramesPerClip": 100,
   "tempFrameDir": "/tmp/simple-nvr-events",

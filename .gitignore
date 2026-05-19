@@ -1,6 +1,7 @@
 .env
 cameras.json
 storage.json
+event-detection.local.json
 test.mp4
 node_modules/
 events/

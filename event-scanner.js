@@ -19,6 +19,22 @@ async function loadConfig(options = {}) {
         const configData = await fsAsync.readFile(configPath, 'utf8');
         config = JSON.parse(configData);
         console.log('✓ Event detection config loaded');
+
+        // Merge optional local override file (not committed to git).
+        // Any key in event-detection.local.json overwrites the same key in the base config.
+        // Example: { "enabled": true, "pythonExecutable": "/home/user/simple-nvr-yolo/bin/python3" }
+        const localConfigPath = path.join(__dirname, 'event-detection.local.json');
+        try {
+            const localData = await fsAsync.readFile(localConfigPath, 'utf8');
+            const localConfig = JSON.parse(localData);
+            Object.assign(config, localConfig);
+            console.log('✓ Local config override applied (event-detection.local.json)');
+        } catch (err) {
+            if (err.code !== 'ENOENT') {
+                console.warn('⚠ Failed to load event-detection.local.json:', err.message);
+            }
+            // ENOENT is expected — local override file is optional
+        }
         
         config.maxFramesPerClip = Number(config.maxFramesPerClip || 8);
         config.sampleEverySeconds = Number(config.sampleEverySeconds || 30);
@@ -485,16 +501,25 @@ async function scanDirectory(dirPath, options = {}) {
         stats.found = allMkvFiles.length;
         if (stats.found === 0) return stats;
 
-        // Only scan output.mkv when no individual 5-minute clips exist for this day
+        // Only scan output.mkv when no individual 5-minute clips exist for this day.
+        // When regular clips exist, output.mkv is a concatenated copy — skip it to avoid
+        // double-counting.  When it is the only file (clips were already deleted after
+        // concatenation), scan it as the best available source for that day.
         const hasRegularClips = allMkvFiles.some(f => f !== 'output.mkv');
+        if (hasRegularClips && allMkvFiles.includes('output.mkv')) {
+            console.log(`  ℹ output.mkv skipped in ${dirPath} (${allMkvFiles.length - 1} individual clip(s) present)`);
+        }
 
         for (const file of allMkvFiles) {
             const clipPath = path.join(dirPath, file);
 
             if (file === 'output.mkv' && hasRegularClips) {
-                console.log(`  → Skip output.mkv (individual clips exist): ${dirPath}`);
                 stats.skipped++;
                 continue;
+            }
+
+            if (file === 'output.mkv' && !hasRegularClips) {
+                console.log(`  ℹ Scanning output.mkv in ${dirPath} (no individual clips found — using concatenated day file)`);
             }
 
             if (scannerState.processedClips[clipPath]) {
@@ -502,7 +527,7 @@ async function scanDirectory(dirPath, options = {}) {
                 continue;
             }
 
-            console.log(`  → Scanning: ${file}`);
+            console.log(`  → Scanning: ${clipPath}`);
             const scanResult = await detectEventsInClip(clipPath, { debug });
             const detections = scanResult.detections;
 

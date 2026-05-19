@@ -107,6 +107,21 @@ All event detection settings live in `event-detection.json`. Recommended configu
 | `motionDetection.enabled` | Pre-filter clips by motion before running YOLO. Saves CPU on static clips |
 | `motionDetection.logMotionEvents` | If `true`, logs a generic `motion` event when YOLO finds nothing classifiable. **Disabled by default** — see note below |
 
+### Local config override
+
+`event-detection.json` is committed to git and contains generic defaults. Machine-specific values (your Pi username, absolute Python path, `"enabled": true`) should go in `event-detection.local.json`, which is **not committed** (it is listed in `.gitignore`).
+
+Any key present in the local file **overwrites** the same key from the base file. You only need to include keys you want to override:
+
+```json
+{
+  "enabled": true,
+  "pythonExecutable": "/home/yourusername/simple-nvr-yolo/bin/python3"
+}
+```
+
+Create this file on the Pi alongside `event-detection.json`. The scanner logs `✓ Local config override applied` on startup when the file is found.
+
 ### Confidence thresholds
 
 Based on real-world testing against a Tapo driveway camera at night and daytime:

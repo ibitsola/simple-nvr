@@ -85,17 +85,23 @@ async function loadConfig(options = {}) {
     }
 }
 
-// Load or initialize scanner state
+// Load or initialize scanner state.
+// Sets scannerState._isNewState = true when the file did not previously exist
+// (fresh install / first deployment) so the caller can seed the state.
 async function loadState() {
     try {
         const statePath = path.join(path.dirname(config.eventLogPath), 'scanner-state.json');
         const stateData = await fsAsync.readFile(statePath, 'utf8');
         scannerState = JSON.parse(stateData);
     } catch (err) {
-        // File doesn't exist yet, start with empty state
+        if (err.code !== 'ENOENT') {
+            console.warn('⚠ Failed to load scanner state (will reinitialise):', err.message);
+        }
+        // File doesn't exist yet (or was unreadable) — start with empty state.
         scannerState = {
             lastScan: 0,
-            processedClips: {}
+            processedClips: {},
+            _isNewState: true
         };
     }
 
@@ -588,24 +594,86 @@ async function scanDirectory(dirPath, options = {}) {
     }
 }
 
+// On first startup (no scanner-state.json), mark all existing clips in the lookback
+// window as already processed so they are not automatically backfilled.
+// New clips created after this point will be picked up by the normal scan loop.
+async function seedScannerState() {
+    const cameraDir = path.join(config.rootpath, config.camera);
+    const lookbackCutoff = new Date();
+    lookbackCutoff.setDate(lookbackCutoff.getDate() - config.scanLookbackDays);
+    const cutoffStr = localDateString(lookbackCutoff);
+    const now = new Date().toISOString();
+    let seeded = 0;
+    try {
+        const years = (await fsAsync.readdir(cameraDir, { withFileTypes: true }))
+            .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name));
+        for (const year of years) {
+            if (year.name < cutoffStr.slice(0, 4)) continue;
+            const months = (await fsAsync.readdir(path.join(cameraDir, year.name), { withFileTypes: true }))
+                .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
+            for (const month of months) {
+                if (`${year.name}-${month.name}` < cutoffStr.slice(0, 7)) continue;
+                const days = (await fsAsync.readdir(path.join(cameraDir, year.name, month.name), { withFileTypes: true }))
+                    .filter(d => d.isDirectory() && /^\d{2}$/.test(d.name));
+                for (const day of days) {
+                    const dateKey = `${year.name}-${month.name}-${day.name}`;
+                    if (dateKey < cutoffStr) continue;
+                    const dayPath = path.join(cameraDir, year.name, month.name, day.name);
+                    try {
+                        const files = await fsAsync.readdir(dayPath);
+                        for (const file of files.filter(f => f.endsWith('.mkv'))) {
+                            const clipPath = path.join(dayPath, file);
+                            if (!scannerState.processedClips[clipPath]) {
+                                scannerState.processedClips[clipPath] = {
+                                    processedAt: now,
+                                    eventCount: 0,
+                                    skippedAtBoot: true
+                                };
+                                seeded++;
+                            }
+                        }
+                    } catch (e) { /* skip unreadable directories */ }
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('⚠ Bootstrap state seed failed (non-fatal):', err.message);
+    }
+    console.log(`  ${seeded} existing clip(s) marked as pre-existing — will not be automatically scanned`);
+}
+
 // Main scanner loop
 async function startScanner() {
     const enabled = await loadConfig();
     if (!enabled) {
         process.exit(0);
     }
-    
+
     await loadState();
-    
-    console.log('✓ Event scanner initialized');
+
+    const isNewState = scannerState._isNewState === true;
+    delete scannerState._isNewState;
+
+    console.log('\nAutomatic scan mode');
+    console.log(`  Lookback window: ${config.scanLookbackDays} day(s)`);
     console.log(`  Camera: ${config.camera}`);
     console.log(`  Classes: ${config.classes.join(', ')}`);
     console.log(`  Event log: ${config.eventLogPath}`);
     console.log(`  Scan interval: ${config.scanIntervalSeconds}s`);
-    
+
+    if (isNewState) {
+        console.log('\n  No scanner state found — initialising from current time (no automatic backfill)');
+        console.log('  Use: node event-scanner.js --date YYYY-MM-DD  to backfill historical clips manually');
+        await seedScannerState();
+        await saveState();
+        console.log('✓ Scanner state initialised');
+    } else {
+        console.log('✓ Event scanner initialised');
+    }
+
     // Run initial scan
     await performScan();
-    
+
     // Schedule recurring scans
     setInterval(performScan, config.scanIntervalSeconds * 1000);
 }

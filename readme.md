@@ -173,6 +173,16 @@ pm2 start event-scanner.js --name event-scanner
 
 The service does not use `--debug` and never creates debug folders.
 
+#### First-run behaviour
+
+On first startup, `/mnt/cctv/events/scanner-state.json` does not exist. The scanner detects this and **does not backfill** historical clips. Instead it:
+
+1. Marks all existing clips in the lookback window as already processed (directory listing only — no inference)
+2. Saves `scanner-state.json` so subsequent restarts behave normally
+3. Logs clearly: `No scanner state found — initialising from current time (no automatic backfill)`
+
+Only clips recorded **after** the scanner starts will be automatically detected. Use `--date` or `--clip` to intentionally backfill older recordings.
+
 ### Manual scan commands
 
 Scan a single clip:

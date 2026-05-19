@@ -1,0 +1,32 @@
+{
+  "enabled": false,
+  "rootpath": "/mnt/cctv",
+  "camera": "driveway",
+  "classes": ["person", "cat", "dog"],
+  "scanIntervalSeconds": 300,
+  "sampleEverySeconds": 3,
+  "maxFramesPerClip": 100,
+  "tempFrameDir": "/tmp/simple-nvr-events",
+  "pythonExecutable": "python3",
+  "pythonDetectorPath": "scripts/detect-events.py",
+  "yoloModel": "yolov8s.pt",
+  "yoloImageSize": 960,
+  "pythonTimeoutMs": 180000,
+  "minConfidence": 0.25,
+  "classConfidence": {
+    "person": 0.45,
+    "cat": 0.15,
+    "dog": 0.15
+  },
+  "eventLogPath": "/mnt/cctv/events/events.jsonl",
+  "thumbnailDir": "/mnt/cctv/events/thumbnails",
+  "retentionDays": 30,
+  "motionDetection": {
+    "enabled": false,
+    "logMotionEvents": false,
+    "minChangedAreaPercent": 0.05,
+    "minMotionBlobPixels": 50,
+    "maxMotionBlobPercent": 5
+  },
+  "mockMode": false
+}

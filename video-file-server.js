@@ -25,7 +25,7 @@ function createTempMp4(mkvPath, tempMp4) {
 
     const promise = new Promise((resolve, reject) => {
         console.log(`Starting MP4 generation for: ${tempMp4}`);
-        const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-f', 'mp4', '-c', 'copy', '-y', tempMp4Tmp]);
+        const ffmpeg = spawn('ffmpeg', ['-i', mkvPath, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-f', 'mp4', '-y', tempMp4Tmp]);
 
         ffmpeg.on('error', (err) => {
             console.error(`FFmpeg spawn error for ${tempMp4Tmp}:`, err);

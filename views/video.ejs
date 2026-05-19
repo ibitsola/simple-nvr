@@ -15,6 +15,10 @@
             <% } %>
             <source src="<%= videoUrl %>" type="<%= videoUrl.endsWith('.mkv') ? 'video/x-matroska' : 'video/mp4' %>">
         </video>
+        <div class="d-flex justify-content-center my-2" style="gap: 0.5rem;">
+            <button class="btn btn-outline-secondary btn-sm" onclick="var v=document.querySelector('video');v.currentTime=Math.max(0,v.currentTime-10);">&#9664;&#9664; 10s</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="var v=document.querySelector('video');v.currentTime=Math.min(isNaN(v.duration)?0:v.duration,v.currentTime+10);">10s &#9654;&#9654;</button>
+        </div>
         <p class="video-note">iPhone playback uses a temporary MP4 copy for 5-minute clips.</p>
     </div>
 

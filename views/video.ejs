@@ -19,7 +19,98 @@
             <button class="btn btn-outline-secondary btn-sm" onclick="var v=document.querySelector('video');v.currentTime=Math.max(0,v.currentTime-10);">&#9664;&#9664; 10s</button>
             <button class="btn btn-outline-secondary btn-sm" onclick="var v=document.querySelector('video');v.currentTime=Math.min(isNaN(v.duration)?0:v.duration,v.currentTime+10);">10s &#9654;&#9654;</button>
         </div>
-        <p class="video-note">iPhone playback uses a temporary MP4 copy for 5-minute clips.</p>
+
+        <% if (videoUrl.endsWith('.mkv') && !videoUrl.includes('/output.mkv')) { %>
+        <div class="text-center mt-2">
+            <a href="<%= videoUrl.replace('.mkv', '.mp4') %>" download class="btn btn-sm btn-outline-success">&#8595; Download MP4</a>
+            <p class="video-note mt-1">iPhone playback uses a temporary MP4 copy. &ldquo;Download MP4&rdquo; saves it to your camera roll.</p>
+        </div>
+        <% } else { %>
+        <p class="video-note">24-hour recording. Use the Extract Clip tool below to save a short clip.</p>
+        <% } %>
+
+        <% if (videoUrl.includes('/output.mkv')) { %>
+        <div class="card mt-3" style="background:#1c1c1c; border:1px solid #333;">
+            <div class="card-body">
+                <h6 class="mb-3">Extract Clip</h6>
+                <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:flex-end;">
+                    <div>
+                        <label class="small text-muted d-block mb-1">Start time</label>
+                        <div style="display:flex; gap:0.25rem;">
+                            <input type="text" id="clip-start" class="form-control form-control-sm"
+                                   value="0:00:00" style="width:95px;" placeholder="H:MM:SS">
+                            <button type="button" class="btn btn-sm btn-outline-secondary"
+                                    onclick="setClipStart()" title="Use current video position">&#9654; Now</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="small text-muted d-block mb-1">Duration (seconds)</label>
+                        <input type="number" id="clip-duration" class="form-control form-control-sm"
+                               value="30" min="1" max="3600" style="width:90px;">
+                    </div>
+                    <div>
+                        <button id="clip-btn" type="button" class="btn btn-sm btn-success"
+                                onclick="extractClip()">&#8595; Extract &amp; Download</button>
+                    </div>
+                </div>
+                <p class="text-muted small mt-2 mb-0">
+                    Extracts a short clip from the 24-hour recording as a shareable MP4.
+                    Extraction takes a few seconds on Pi. Max 3600 s (1 hour).
+                </p>
+            </div>
+        </div>
+        <script>
+        function setClipStart() {
+            var v = document.querySelector('video');
+            if (!v) return;
+            var t = Math.floor(v.currentTime || 0);
+            var h = Math.floor(t / 3600);
+            var m = Math.floor((t % 3600) / 60);
+            var s = t % 60;
+            document.getElementById('clip-start').value =
+                h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        }
+
+        function parseHms(str) {
+            var parts = str.trim().split(':').map(Number);
+            if (parts.some(isNaN)) return NaN;
+            if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+            if (parts.length === 2) return parts[0] * 60 + parts[1];
+            return parts[0];
+        }
+
+        function extractClip() {
+            var startSec = parseHms(document.getElementById('clip-start').value);
+            var duration = parseInt(document.getElementById('clip-duration').value, 10);
+            if (isNaN(startSec) || startSec < 0) {
+                alert('Invalid start time. Use H:MM:SS (e.g. 1:30:00).');
+                return;
+            }
+            if (isNaN(duration) || duration < 1 || duration > 3600) {
+                alert('Duration must be 1–3600 seconds.');
+                return;
+            }
+            var src = <%- JSON.stringify(videoUrl.replace(/^\/api\//, '')) %>;
+            var url = '/api-clip?src=' + encodeURIComponent(src) +
+                      '&start=' + startSec + '&duration=' + duration;
+            var btn = document.getElementById('clip-btn');
+            btn.textContent = 'Extracting\u2026';
+            btn.disabled = true;
+            // Trigger download without navigating away from the page
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = '';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            // Re-enable after a few seconds (extraction typically takes 2–10 s on Pi)
+            setTimeout(function () {
+                btn.textContent = '\u2195 Extract \u0026 Download';
+                btn.disabled = false;
+            }, 8000);
+        }
+        </script>
+        <% } %>
     </div>
 
     <%- include('includes/video-keys.ejs') %>

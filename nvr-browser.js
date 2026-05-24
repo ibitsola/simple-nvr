@@ -283,7 +283,9 @@ app.get('*', async (req, res, next) => {
     }
 
     const directory = path.join(storage.rootpath, ...route);
-    const ignoreNames = new Set(['raw', 'lost+found', 'test.txt', 'files.txt']);
+    // 'tmp' contains internal working storage (MP4 cache, event frames, extracted clips)
+    // and must never appear as a camera/folder option in the UI.
+    const ignoreNames = new Set(['raw', 'lost+found', 'test.txt', 'files.txt', 'tmp']);
     const folderItems = (await fsAsync.readdir(directory, { withFileTypes: true }))
         .filter(dirent => !ignoreNames.has(dirent.name))
         .map(dirent => {

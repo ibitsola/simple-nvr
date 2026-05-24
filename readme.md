@@ -15,14 +15,26 @@ To get started, the following steps must be taken:
 1. Install [ffmpeg](https://ffmpeg.org/).
 2. Choose where you want video files to be saved, and update the `rootpath` directory in the `/storage.json` configuration file.
    * Optional: set `retentionDays` (default `30`) to automatically delete fully completed day folders older than this many days.
-3. Add camera names and RTSP addresses to the `/cameras.json` configuation file.
-4. Run the `nvr.js` server. e.g. using [PM2](https://pm2.keymetrics.io/) with: 
-```
-pm2 start nvr.js --name nvr
+3. Add camera names and RTSP addresses to the `/cameras.json` configuration file.
+4. Copy `.env.example` to `.env` and set `CCTV_VIEWER_USERNAME` and `CCTV_VIEWER_PASSWORD` for the web UI login.
+5. Start the services with [PM2](https://pm2.keymetrics.io/):
+
+```bash
+# Recorder (saves 5-minute MKV clips, runs daily concat at 01:00 UTC)
+pm2 start nvr.js --name cctv
+
+# Web browser / iPhone MP4 server (port 3000)
+pm2 start nvr-browser.js --name cctv-browser
+
+# Event scanner — see the "Offline event detection" section below
+pm2 start event-scanner.js --name event-scanner
+
+pm2 save
 ```
 
-The `nvr.js` server will record the videos in 5 minute clips, and combine them at 01:00 UTC every day into a 24 hour video file.
-Running `nvr-browser.js` will start a webserver at `http://localhost:3000` that will enable you to browser the folder structure and view video files (see example image below)
+`nvr.js` records video only. `nvr-browser.js` runs the web UI at `http://localhost:3000`. They are independent processes — you can run one or both.
+
+The `nvr.js` server records in 5-minute clips, combining them at 01:00 UTC every day into a 24-hour file.
 
 ![Video example](/images/video-example.png)
 
@@ -63,7 +75,7 @@ All event detection settings live in `event-detection.json`. Recommended configu
   "scanIntervalSeconds": 300,
   "sampleEverySeconds": 3,
   "maxFramesPerClip": 100,
-  "tempFrameDir": "/tmp/simple-nvr-events",
+  "tempFrameDir": "/mnt/cctv/tmp/simple-nvr-events",
   "pythonExecutable": "/home/pi/simple-nvr-yolo/bin/python3",
   "pythonDetectorPath": "scripts/detect-events.py",
   "yoloModel": "yolov8s.pt",
@@ -233,22 +245,72 @@ These controls apply to all video playback — both individual 5-minute clips an
 
 ---
 
+## Downloading and sharing clips
+
+### Download MP4 (5-minute clips)
+
+When viewing any individual 5-minute clip, a **Download MP4** button appears below the player. Tapping it on iPhone will save the temporary MP4 to your camera roll. The same MP4 that is generated for iPhone playback is served — no extra processing.
+
+### Extract a short clip from the 24-hour recording
+
+After the daily concat runs at 01:00 UTC, individual 5-minute clips are deleted and only `output.mkv` (the full 24-hour file) remains for that day. The **Extract Clip** panel appears below the player when viewing any `output.mkv`.
+
+**How to use it:**
+1. Seek the video to the moment of interest
+2. Press **▶ Now** to fill in the start time from the current playback position
+3. Set a duration in seconds (default 30 s, max 3600 s / 1 hour)
+4. Press **↓ Extract & Download** — the server uses ffmpeg to extract the clip and serve it as a download
+
+**Technical notes:**
+- The clip is extracted server-side using `ffmpeg -ss <start> -i <source> -t <duration> -c:v copy -c:a aac -movflags +faststart`
+- Video is stream-copied (fast — no re-encoding). Audio is transcoded to AAC for compatibility
+- `-movflags +faststart` moves the moov atom to the front of the output file so it plays immediately when shared via WhatsApp or iMessage
+- Extraction typically takes 2–10 seconds on a Raspberry Pi for short clips
+- Extracted clips are cached in `/mnt/cctv/tmp/simple-nvr-clips/` and purged after 10 minutes of inactivity
+- The downloaded file is named `clip-HH-MM-SS-<dur>s.mp4` (start time + duration)
+
+> **Note on seek accuracy:** `-ss` before `-i` performs a fast keyframe seek. The clip will start at the nearest keyframe before the requested time (typically within 1–2 seconds of a GOP boundary). For exact frame accuracy, use the manual ffmpeg command below.
+
+**Manual clip extraction (exact frame accuracy):**
+```bash
+ffmpeg -i "/mnt/cctv/driveway/2026/05/23/output.mkv" \
+  -ss 00:14:30 -t 60 \
+  -c:v copy -c:a aac -b:a 128k -movflags +faststart \
+  /tmp/clip.mp4
+```
+
+---
+
 ## Notes about the code and methods used
 **Extra details about the implementation and ffmpeg configuration**
 
 ### MP4 vs MKV
-`mkv` files seem to be more resistent to corruption. When unplugging the camera while an `mp4` file is being written to, the file is un-openable. When recording to an `mkv` file and the camera is unplugged, the files can be played and data is available until nearly the point of unplugging. `mkv` files can be played in the browser in the latest version of Chrome (as of October 2021). 
+`mkv` files seem to be more resistent to corruption. When unplugging the camera while an `mp4` file is being written to, the file is un-openable. When recording to an `mkv` file and the camera is unplugged, the files can be played and data is available until nearly the point of unplugging. `mkv` files can be played in the browser in the latest version of Chrome (as of October 2021).
+
+### Temporary storage
+
+All temporary files are stored on the **external drive** (not tmpfs `/tmp`) to avoid filling the SD card or RAM:
+
+| Directory | Contents | Purged after |
+|---|---|---|
+| `<rootpath>/tmp/simple-nvr-mp4/` | On-demand MP4 conversions for iPhone/Safari playback | 5 min inactivity |
+| `<rootpath>/tmp/simple-nvr-clips/` | Extracted clips created by the "Extract Clip" tool | 10 min inactivity |
+| `<rootpath>/tmp/simple-nvr-events/` | Sampled frames used during YOLO event scanning | Cleaned up after each clip scan |
+
+These directories are created automatically. The `tmp/` folder is **hidden** from the browser file listing.
+
+> **Note on deleted-but-open files:** on Linux, `unlink()` only removes the directory entry; the data blocks remain until all file descriptors referencing the inode are closed. The server explicitly destroys `ReadStream` instances when the HTTP response closes (`res.on('close', () => stream.destroy())`), so deleted temp files are immediately reclaimed. You can verify with `sudo lsof +L1 | grep cctv-browser` — the output should be empty. 
 
 ### Audio in MP4 / iPhone playback
 
-Recordings are saved as `.mkv`. When the browser requests a 5-minute clip as `.mp4` (for iPhone/Safari), the server generates a temporary MP4 on demand and caches it in `/tmp/simple-nvr-mp4/` for subsequent requests. Cache files are purged after 5 minutes of inactivity.
+Recordings are saved as `.mkv`. When the browser requests a 5-minute clip as `.mp4` (for iPhone/Safari), the server generates a temporary MP4 on demand and caches it in `/mnt/cctv/tmp/simple-nvr-mp4/` for subsequent requests. Cache files are purged after 5 minutes of inactivity.
 
 - The video codec is **stream-copied** from the MKV (`-c:v copy`) — no re-encoding, fast.
 - Audio is **transcoded to AAC** (`-c:a aac -b:a 128k`) to ensure compatibility with iPhone/Safari. Some IP camera audio codecs (e.g. G.711/PCM) are not supported in MP4 by Safari; re-encoding to AAC fixes this.
 - **`-movflags +faststart` is intentionally not used.** That flag requires ffmpeg to write the entire file and then read-and-rewrite it a second time to move the moov atom to the front — on a Raspberry Pi this doubles the I/O of a potentially 200 MB+ file and can cause memory pressure or audio corruption when combined with AAC encoding. The server already serves proper HTTP byte-range responses, so Safari can locate the moov atom at the end of the file without faststart.
 - **On first access**, the MP4 is generated while the browser waits (typically a few seconds for video-copy + AAC encode on a Pi). Subsequent accesses are served immediately from the cache.
 
-> **If audio is silent on both PC and iPhone:** clear the MP4 cache (`rm /tmp/simple-nvr-mp4/*.mp4`) and reload the page to force regeneration with the latest ffmpeg settings.
+> **If audio is silent on both PC and iPhone:** clear the MP4 cache (`rm /mnt/cctv/tmp/simple-nvr-mp4/*.mp4`) and reload the page to force regeneration with the latest ffmpeg settings.
 
 The recording pipeline captures audio from the camera stream with `-c:a copy`. If the camera produces no audio in its RTSP stream, the MKV and generated MP4 will be silent regardless of the conversion settings.
 

@@ -7,7 +7,7 @@
   "scanLookbackDays": 1,
   "sampleEverySeconds": 3,
   "maxFramesPerClip": 100,
-  "tempFrameDir": "/tmp/simple-nvr-events",
+  "tempFrameDir": "/mnt/cctv/tmp/simple-nvr-events",
   "pythonExecutable": "python3",
   "pythonDetectorPath": "scripts/detect-events.py",
   "yoloModel": "yolov8s.pt",

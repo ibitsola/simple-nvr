@@ -40,7 +40,9 @@ async function loadConfig(options = {}) {
         config.sampleEverySeconds = Number(config.sampleEverySeconds || 30);
         config.minConfidence = Number(config.minConfidence || 0.5);
         config.classes = config.classes || ['person', 'cat'];
-        config.tempFrameDir = config.tempFrameDir || '/tmp/simple-nvr-events';
+        // tempFrameDir defaults to a subdirectory of the recording rootpath so
+        // extracted frames land on the external disk, not tmpfs /tmp.
+        config.tempFrameDir = config.tempFrameDir || path.join(config.rootpath, 'tmp', 'simple-nvr-events');
         config.pythonExecutable = config.pythonExecutable || 'python3';
         config.pythonDetectorPath = config.pythonDetectorPath || 'scripts/detect-events.py';
         config.yoloModel = config.yoloModel || 'yolov8n.pt';

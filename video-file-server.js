@@ -2,14 +2,15 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const fsPromises = fs.promises;
-const os = require('os');
 const { spawn } = require('child_process');
 
 var router = express.Router();
 
 const storage = require('./storage.json');
 
-const tempDir = path.join(os.tmpdir(), 'simple-nvr-mp4');
+// Store temp MP4s on the external drive (not tmpfs /tmp) to avoid RAM exhaustion.
+// storage.rootpath is /mnt/cctv on Pi.
+const tempDir = path.join(storage.rootpath, 'tmp', 'simple-nvr-mp4');
 if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 const generationPromises = new Map();
 
@@ -130,12 +131,16 @@ function serveVideoFile(filePath, res, ext, req) {
                 "Content-Type": contentType,
             });
 
-            return fs.createReadStream(filePath)
+            const fullStream = fs.createReadStream(filePath)
                 .on("error", function (err) {
-                    console.log('stream error', err)
+                    console.log('stream error', err);
                     res.send(err);
-                })
-                .pipe(res);
+                });
+            // Destroy the ReadStream when the client disconnects so the file
+            // descriptor is closed immediately — preventing deleted-but-open
+            // inode leaks on tmpfs / the external disk.
+            res.on('close', () => fullStream.destroy());
+            return fullStream.pipe(res);
         }
 
         // Parse Range
@@ -185,9 +190,13 @@ function serveVideoFile(filePath, res, ext, req) {
                 .on("open", function () {
                     stream.pipe(res);
                 }).on("error", function (err) {
-                    console.log('stream error', err)
+                    console.log('stream error', err);
                     res.send(err);
                 });
+            // Destroy the ReadStream when the client disconnects so the file
+            // descriptor is closed immediately — preventing deleted-but-open
+            // inode leaks on the external disk.
+            res.on('close', () => stream.destroy());
         });
     });
 }
